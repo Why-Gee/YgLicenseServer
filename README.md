@@ -1,5 +1,7 @@
 # YgLicenseServer
 
+[![test](https://github.com/Why-Gee/YgLicenseServer/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/Why-Gee/YgLicenseServer/actions/workflows/test.yml)
+
 Self-hostable multi-product license server. Issues Ed25519-signed JWTs to
 on-prem app installs, handles Stripe/Paddle webhooks, ships with a web
 admin UI for issuing keys, revoking, and downloading public keys.
@@ -103,6 +105,22 @@ alembic history             # see chain
 ```
 
 Tests bypass alembic and call `db.init_db()` to set up an in-memory SQLite — fast, no migration step in the unit-test path.
+
+## Versioning & releases
+
+SemVer. `app/__init__.py:__version__` is the source of truth — bump it together with `pyproject.toml:version` in the same commit.
+
+CI publishes a Docker image to GitHub Container Registry on every `v*.*.*` tag:
+
+```sh
+# bump version, commit, then:
+git tag v0.3.0
+git push --tags
+# release.yml builds + pushes ghcr.io/why-gee/yg-license-server:v0.3.0 + :latest
+docker pull ghcr.io/why-gee/yg-license-server:v0.3.0
+```
+
+Branch protection on `main` (one-time setup in GitHub: *Settings → Branches → Add rule*) — require the `test` workflow green before merging.
 
 ## Backups (do not skip)
 
