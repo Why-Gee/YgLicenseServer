@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.email import send_license_email
 from app.models import Customer, Event, License, Product
 
 log = logging.getLogger("license-server.stripe")
@@ -99,6 +100,7 @@ def _extend_or_create(
             license_id=lic.id, product_id=product.id,
             type="issued", payload={}, note="stripe invoice.paid",
         ))
+        send_license_email(to=cust.email, key=key, product_name=product.name)
     else:
         floor = datetime.utcnow()
         base = max(lic.valid_until, floor)

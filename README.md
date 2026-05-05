@@ -84,6 +84,27 @@ claims = jwt.decode(token, public_key_pem, algorithms=["EdDSA"], options={"verif
 
 `valid_until` is the source of truth for license expiry; `exp` is just the JWT cache TTL (default 7 days). Clients honor a configurable grace period after `valid_until` so the server can be down briefly without breaking customers.
 
+## License-issue email
+
+When a license is created (admin UI, `/v1/admin/.../licenses`, or Stripe `invoice.paid`), the customer is emailed their key via [Resend](https://resend.com/). Email sends are best-effort — a transient outage won't fail license issuance.
+
+Config:
+
+```sh
+export RESEND_API_KEY=re_...                # required for actual sends
+export EMAIL_FROM="onboarding@resend.dev"   # default; replace with licenses@<your-domain> after verifying a domain in Resend
+```
+
+If `RESEND_API_KEY` is unset, sends are no-ops and the intent is logged. That's the supported "dev / not-yet-launched" mode — useful while you wire up Stripe / a domain.
+
+To go live to real customers:
+
+1. Sign up at [resend.com](https://resend.com), grab an API key.
+2. Add a sending domain (4 DNS records — DKIM/SPF/MX/return-path). Resend's onboarding walks you through it.
+3. Set `EMAIL_FROM=licenses@<your-verified-domain>` and redeploy.
+
+Until then, the test sender `onboarding@resend.dev` only delivers to the email you signed up for at Resend.
+
 ## Schema migrations
 
 This repo uses [Alembic](https://alembic.sqlalchemy.org/) for schema changes. The Docker image runs `alembic upgrade head` on container boot via `docker-entrypoint.sh`, so prod DBs are migrated automatically.
