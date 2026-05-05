@@ -1,0 +1,15 @@
+{
+    email {$ADMIN_EMAIL}
+}
+
+{$LICENSE_HOST} {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8800
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 50mb
+            roll_keep 5
+        }
+        format json
+    }
+}

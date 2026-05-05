@@ -36,6 +36,8 @@ Open <http://localhost:8800/admin>, log in with `$ADMIN_TOKEN`, and create your 
 
 Any host that runs Docker. The included `Dockerfile` is single-stage, ~120MB.
 
+For a fully wired-up free-tier deploy on GCP `e2-micro` with Caddy + Let's Encrypt + DuckDNS, see [docs/deploy/gcp.md](docs/deploy/gcp.md).
+
 ```sh
 docker build -t yg-license-server .
 docker run --rm -p 8800:8800 \

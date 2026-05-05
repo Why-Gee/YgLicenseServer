@@ -1,0 +1,22 @@
+[Unit]
+Description=YgLicenseServer (Docker)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+EnvironmentFile=/etc/yg-license-server/yg-license-server.env
+ExecStartPre=-/usr/bin/docker rm -f yg-license-server
+ExecStartPre=/usr/bin/docker pull ${IMAGE}
+ExecStart=/usr/bin/docker run --rm --name yg-license-server \
+  -p 127.0.0.1:8800:8800 \
+  -v /var/lib/yg-license-server:/data \
+  --env-file /etc/yg-license-server/yg-license-server.env \
+  ${IMAGE}
+ExecStop=/usr/bin/docker stop yg-license-server
+
+[Install]
+WantedBy=multi-user.target
