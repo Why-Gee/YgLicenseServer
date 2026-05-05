@@ -1,5 +1,5 @@
 [project]
-name = "license-server"
+name = "yg-license-server"
 version = "0.2.0"
 description = "Self-hostable multi-product license server. Issues signed JWTs, handles Stripe webhooks, ships with an admin UI."
 requires-python = ">=3.12"

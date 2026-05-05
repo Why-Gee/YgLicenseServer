@@ -1,4 +1,4 @@
-# license-server
+# YgLicenseServer
 
 Self-hostable multi-product license server. Issues Ed25519-signed JWTs to
 on-prem app installs, handles Stripe/Paddle webhooks, ships with a web
@@ -35,14 +35,14 @@ Open <http://localhost:8800/admin>, log in with `$ADMIN_TOKEN`, and create your 
 Any host that runs Docker. The included `Dockerfile` is single-stage, ~120MB.
 
 ```sh
-docker build -t license-server .
+docker build -t yg-license-server .
 docker run --rm -p 8800:8800 \
   -e ADMIN_TOKEN=$ADMIN_TOKEN \
   -e SESSION_SECRET=$ADMIN_TOKEN \
   -e DATABASE_URL=sqlite:////data/license.db \
   -e COOKIE_SECURE=true \
   -v $PWD/data:/data \
-  license-server
+  yg-license-server
 ```
 
 For prod use Postgres (`postgresql+psycopg://...`), put the server behind HTTPS, and **back up the DB regularly** — losing it loses every license you've ever issued (the private keys live there).

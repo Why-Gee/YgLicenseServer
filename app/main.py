@@ -20,7 +20,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="License Server", version=__version__, lifespan=lifespan)
+app = FastAPI(title="YgLicenseServer", version=__version__, lifespan=lifespan)
 app.include_router(api_router)
 app.include_router(stripe_router)
 app.include_router(admin_ui_router)
