@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}{{ product.slug }}{% endblock %}
+{% block content %}
+<p class="muted"><a href="/admin">← dashboard</a></p>
+<h1>{{ product.name }} <code style="font-size:.6em;">{{ product.slug }}</code></h1>
+
+{% if request.query_params.get('issued') %}
+<div class="success">license issued. find the key in the table below — copy it now (we don't show it again in plain text).</div>
+{% endif %}
+{% if request.query_params.get('error') %}
+<div class="error">{{ request.query_params.get('error') }}</div>
+{% endif %}
+
+<div class="card">
+  <h3 style="margin-top:0;">product info</h3>
+  <table>
+    <tr><th style="width:160px;">key prefix</th><td><code>{{ product.key_prefix }}_…</code></td></tr>
+    <tr><th>JWT issuer</th><td><code>{{ product.jwt_issuer }}</code></td></tr>
+    <tr><th>stripe webhook</th><td>
+      {% if product.stripe_webhook_configured %}<span class="badge active">configured</span>
+      {% else %}<span class="badge revoked">not configured</span>{% endif %}
+    </td></tr>
+    <tr><th>created</th><td class="muted">{{ product.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</td></tr>
+  </table>
+
+  <h3>public key</h3>
+  <p class="muted">bake this into the client image at the path your client expects (e.g. <code>backend/app/licensing/keys/license_pub.pem</code>).</p>
+  <pre>{{ product.public_key_pem }}</pre>
+  <a class="btn" href="/admin/products/{{ product.slug }}/pubkey.pem">download pubkey.pem</a>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">issue a license</h3>
+  <form method="post" action="/admin/products/{{ product.slug }}/licenses" style="display:grid;grid-template-columns:1fr 1fr;gap:.5em 1em;">
+    <div><label>customer email</label><input name="email" type="email" required></div>
+    <div><label>plan</label><input name="plan" value="standard" required></div>
+    <div><label>max users</label><input name="max_users" type="number" value="10" min="1"></div>
+    <div><label>valid days</label><input name="valid_days" type="number" value="365" min="1"></div>
+    <div style="grid-column:1/-1;">
+      <label>features (json)</label>
+      <input name="features_json" value='{"chat_agent": true}' placeholder='{"chat_agent":true,"no_ads":false}'>
+    </div>
+    <div style="grid-column:1/-1;"><button type="submit">issue license</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">licenses ({{ licenses | length }})</h3>
+  {% if licenses %}
+  <table>
+    <thead><tr>
+      <th>key</th><th>customer</th><th>plan</th><th>status</th><th>valid until</th><th></th>
+    </tr></thead>
+    <tbody>
+    {% for lic in licenses %}
+      <tr>
+        <td><code style="font-size:.85em;">{{ lic.key }}</code></td>
+        <td>{{ lic.customer.email }}</td>
+        <td>{{ lic.plan }}</td>
+        <td><span class="badge {{ lic.status }}">{{ lic.status }}</span></td>
+        <td class="muted">{{ lic.valid_until.strftime('%Y-%m-%d') }}</td>
+        <td>
+          {% if lic.status != 'revoked' %}
+          <form method="post" action="/admin/licenses/{{ lic.id }}/revoke" style="margin:0;display:inline;"
+                onsubmit="return confirm('revoke this license? it cannot be undone via the UI.');">
+            <button type="submit" class="btn danger">revoke</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">no licenses issued yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

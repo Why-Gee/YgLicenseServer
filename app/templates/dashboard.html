@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}dashboard{% endblock %}
+{% block content %}
+<h1>dashboard</h1>
+
+<div class="grid">
+  <div class="card stat"><div class="n">{{ products | length }}</div><div class="l">products</div></div>
+  <div class="card stat"><div class="n">{{ active_licenses }}</div><div class="l">active licenses</div></div>
+  <div class="card stat"><div class="n">{{ total_licenses }}</div><div class="l">total licenses</div></div>
+</div>
+
+<div class="card">
+  <div style="display:flex;align-items:center;justify-content:space-between;">
+    <h2 style="margin:0;">products</h2>
+    <a class="btn" href="/admin/products/new">+ new product</a>
+  </div>
+  {% if products %}
+  <table>
+    <thead><tr><th>slug</th><th>name</th><th>prefix</th><th>licenses</th><th>created</th></tr></thead>
+    <tbody>
+    {% for p in products %}
+      <tr>
+        <td><a href="/admin/products/{{ p.slug }}"><code>{{ p.slug }}</code></a></td>
+        <td>{{ p.name }}</td>
+        <td><code>{{ p.key_prefix }}_</code></td>
+        <td>{{ p.licenses | length }}</td>
+        <td class="muted">{{ p.created_at.strftime('%Y-%m-%d') }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">no products yet — create one to start issuing licenses.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0;">recent events</h2>
+  {% if recent_events %}
+  <table>
+    <thead><tr><th>when</th><th>type</th><th>note</th></tr></thead>
+    <tbody>
+    {% for e in recent_events %}
+      <tr>
+        <td class="muted">{{ e.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td><code>{{ e.type }}</code></td>
+        <td class="muted">{{ e.note or '' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">no events yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

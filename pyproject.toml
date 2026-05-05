@@ -1,0 +1,39 @@
+[project]
+name = "license-server"
+version = "0.2.0"
+description = "Self-hostable multi-product license server. Issues signed JWTs, handles Stripe webhooks, ships with an admin UI."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic[email]>=2.9",
+    "sqlalchemy>=2.0.36",
+    "alembic>=1.14",
+    "cryptography>=43",
+    "pyjwt[crypto]>=2.9",
+    "stripe>=10",
+    "python-multipart>=0.0.20",
+    "psycopg[binary]>=3.2",
+    "jinja2>=3.1",
+    "itsdangerous>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.28",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

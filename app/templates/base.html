@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}license server{% endblock %}</title>
+  <style>
+    :root { --bg:#0d1117; --fg:#c9d1d9; --muted:#8b949e; --accent:#58a6ff; --danger:#f85149; --ok:#3fb950; --bd:#30363d; --card:#161b22; }
+    * { box-sizing: border-box; }
+    body { background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; margin:0; }
+    a { color:var(--accent); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    nav { background:var(--card); border-bottom:1px solid var(--bd); padding:.7em 1.5em; display:flex; gap:1.5em; align-items:center; }
+    nav a { color:var(--fg); }
+    nav .right { margin-left:auto; }
+    main { max-width:1200px; margin:0 auto; padding:1.5em; }
+    h1, h2, h3 { line-height:1.2; }
+    table { width:100%; border-collapse:collapse; margin:1em 0; }
+    th, td { padding:.5em .7em; border-bottom:1px solid var(--bd); text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-weight:600; font-size:.85em; text-transform:uppercase; letter-spacing:.05em; }
+    code, pre { font-family:Menlo,Consolas,monospace; }
+    code { background:var(--card); padding:.1em .35em; border-radius:3px; font-size:.9em; }
+    pre { background:var(--card); border:1px solid var(--bd); padding:1em; border-radius:6px; overflow:auto; }
+    .card { background:var(--card); border:1px solid var(--bd); border-radius:8px; padding:1.2em; margin:1em 0; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:1em; }
+    .stat { text-align:center; }
+    .stat .n { font-size:2em; font-weight:600; color:var(--accent); }
+    .stat .l { color:var(--muted); font-size:.9em; }
+    form label { display:block; margin:.8em 0 .25em; color:var(--muted); font-size:.9em; }
+    form input, form textarea, form select { width:100%; padding:.5em .7em; border:1px solid var(--bd); background:var(--bg); color:var(--fg); border-radius:4px; font:inherit; }
+    button, .btn { background:var(--accent); color:#fff; border:0; padding:.5em 1.1em; border-radius:4px; cursor:pointer; font:inherit; display:inline-block; }
+    button:hover, .btn:hover { filter:brightness(1.1); text-decoration:none; }
+    .btn.danger { background:var(--danger); }
+    .btn.muted { background:#21262d; color:var(--fg); border:1px solid var(--bd); }
+    .badge { display:inline-block; padding:.1em .55em; border-radius:10px; font-size:.8em; }
+    .badge.active { background:rgba(63,185,80,.15); color:var(--ok); }
+    .badge.delinquent { background:rgba(248,81,73,.15); color:var(--danger); }
+    .badge.revoked { background:#21262d; color:var(--muted); }
+    .error { background:rgba(248,81,73,.1); border:1px solid var(--danger); padding:.7em 1em; border-radius:4px; color:var(--danger); margin:1em 0; }
+    .success { background:rgba(63,185,80,.1); border:1px solid var(--ok); padding:.7em 1em; border-radius:4px; color:var(--ok); margin:1em 0; }
+    .muted { color:var(--muted); }
+  </style>
+</head>
+<body>
+  {% if request.cookies.get('asm_ls_session') %}
+  <nav>
+    <strong><a href="/admin">license server</a></strong>
+    <a href="/admin">dashboard</a>
+    <a href="/admin/customers">customers</a>
+    <a href="/admin/events">events</a>
+    <form class="right" action="/admin/logout" method="post" style="margin:0;">
+      <button class="btn muted" type="submit">logout</button>
+    </form>
+  </nav>
+  {% endif %}
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}events{% endblock %}
+{% block content %}
+<h1>events</h1>
+<div class="card">
+  {% if events %}
+  <table>
+    <thead><tr><th>when</th><th>type</th><th>license</th><th>note</th></tr></thead>
+    <tbody>
+    {% for e in events %}
+      <tr>
+        <td class="muted">{{ e.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td><code>{{ e.type }}</code></td>
+        <td class="muted"><code style="font-size:.8em;">{{ e.license_id or '—' }}</code></td>
+        <td>{{ e.note or '' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">no events yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

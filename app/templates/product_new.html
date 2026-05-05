@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}new product{% endblock %}
+{% block content %}
+<h1>new product</h1>
+<p class="muted">creating a product generates a fresh ed25519 keypair. private key stays in the database; public key gets baked into the client app's image.</p>
+
+<form method="post" action="/admin/products" class="card" style="max-width:600px;">
+  <label for="slug">slug</label>
+  <input id="slug" name="slug" required pattern="[a-z0-9][a-z0-9-]{0,62}" placeholder="asm">
+  <small class="muted">lowercase, a–z 0–9 –, max 63. URL-safe.</small>
+
+  <label for="name">display name</label>
+  <input id="name" name="name" required placeholder="Animal Shelter Manager">
+
+  <label for="key_prefix">license-key prefix</label>
+  <input id="key_prefix" name="key_prefix" required pattern="[a-z0-9_]{1,15}" placeholder="asm">
+  <small class="muted">keys for this product look like <code>asm_aB7…</code>. lowercase a–z 0–9 _, max 15.</small>
+
+  <label for="jwt_issuer">JWT issuer (optional)</label>
+  <input id="jwt_issuer" name="jwt_issuer" placeholder="asm-license-server">
+  <small class="muted">defaults to <code>&lt;slug&gt;-license-server</code>.</small>
+
+  <label for="description">description (optional)</label>
+  <textarea id="description" name="description" rows="3"></textarea>
+
+  <button type="submit" style="margin-top:1em;">create product</button>
+  <a class="btn muted" href="/admin" style="margin-left:.5em;">cancel</a>
+</form>
+{% endblock %}
