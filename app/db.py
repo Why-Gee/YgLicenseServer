@@ -20,7 +20,8 @@ SessionLocal = sessionmaker(bind=_engine_singleton, autoflush=False, autocommit=
 
 
 def init_db() -> None:
-    """Create tables for SQLite/dev. In prod use alembic."""
+    """Create tables directly via metadata. Used by tests only — prod boot
+    runs `alembic upgrade head` from docker-entrypoint.sh."""
     Base.metadata.create_all(bind=_engine_singleton)
 
 

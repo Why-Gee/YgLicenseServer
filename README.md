@@ -82,6 +82,28 @@ claims = jwt.decode(token, public_key_pem, algorithms=["EdDSA"], options={"verif
 
 `valid_until` is the source of truth for license expiry; `exp` is just the JWT cache TTL (default 7 days). Clients honor a configurable grace period after `valid_until` so the server can be down briefly without breaking customers.
 
+## Schema migrations
+
+This repo uses [Alembic](https://alembic.sqlalchemy.org/) for schema changes. The Docker image runs `alembic upgrade head` on container boot via `docker-entrypoint.sh`, so prod DBs are migrated automatically.
+
+After any change to `app/models.py`:
+
+```sh
+alembic revision --autogenerate -m "<short message>"
+# review the generated file under alembic/versions/ before committing
+# autogenerate misses renames + enum changes — hand-edit those
+```
+
+Local apply / rollback:
+
+```sh
+alembic upgrade head        # apply pending
+alembic downgrade -1        # roll back one — local only, never on prod
+alembic history             # see chain
+```
+
+Tests bypass alembic and call `db.init_db()` to set up an in-memory SQLite — fast, no migration step in the unit-test path.
+
 ## Backups (do not skip)
 
 The DB holds every product's private key. Lose it and every license stops verifying.
