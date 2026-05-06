@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
-from app.models import Customer, Event, License, Product
+from app.models import Customer, Event, Install, License, Product
 from app.signing import generate_keypair
 
 router = APIRouter()
@@ -252,6 +252,48 @@ def license_revoke(lid: str, request: Request, db: Session = Depends(get_db)) ->
     ))
     db.commit()
     return RedirectResponse(f"/admin/products/{lic.product.slug}", status_code=303)
+
+
+def _delete_license(db: Session, lic: License) -> None:
+    # Audit row first (with the key snapshot so a deleted-license trail still
+    # tells you what was killed). Existing event rows for this license get
+    # license_id NULL'd to preserve their history without a dangling FK.
+    db.add(Event(
+        product_id=lic.product_id, type="license:deleted",
+        payload={"license_id": lic.id, "key": lic.key, "customer": lic.customer.email},
+        note="ui/delete",
+    ))
+    db.query(Event).filter_by(license_id=lic.id).update({"license_id": None})
+    db.query(Install).filter_by(license_id=lic.id).delete()
+    db.delete(lic)
+
+
+@router.post("/admin/products/{slug}/licenses/delete")
+def licenses_bulk_delete(
+    slug: str,
+    request: Request,
+    license_ids: list[str] = Form(default=[]),
+    db: Session = Depends(get_db),
+) -> Response:
+    _require_login(request)
+    p = db.query(Product).filter_by(slug=slug).one_or_none()
+    if p is None:
+        raise HTTPException(status_code=404)
+    if not license_ids:
+        return RedirectResponse(
+            f"/admin/products/{slug}?error=no+licenses+selected", status_code=303
+        )
+    deleted = 0
+    for lid in license_ids:
+        lic = db.query(License).filter_by(id=lid, product_id=p.id).one_or_none()
+        if lic is None:
+            continue
+        _delete_license(db, lic)
+        deleted += 1
+    db.commit()
+    return RedirectResponse(
+        f"/admin/products/{slug}?deleted={deleted}", status_code=303
+    )
 
 
 # ----- customers / events --------------------------------------------------

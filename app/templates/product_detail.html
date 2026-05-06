@@ -7,6 +7,9 @@
 {% if request.query_params.get('issued') %}
 <div class="success">license issued. find the key in the table below — copy it now (we don't show it again in plain text).</div>
 {% endif %}
+{% if request.query_params.get('deleted') %}
+<div class="success">deleted {{ request.query_params.get('deleted') }} license(s). audit trail preserved in events.</div>
+{% endif %}
 {% if request.query_params.get('error') %}
 <div class="error">{{ request.query_params.get('error') }}</div>
 {% endif %}
@@ -47,30 +50,44 @@
 <div class="card">
   <h3 style="margin-top:0;">licenses ({{ licenses | length }})</h3>
   {% if licenses %}
-  <table>
-    <thead><tr>
-      <th>key</th><th>customer</th><th>plan</th><th>status</th><th>valid until</th><th></th>
-    </tr></thead>
-    <tbody>
-    {% for lic in licenses %}
-      <tr>
-        <td><code style="font-size:.85em;">{{ lic.key }}</code></td>
-        <td>{{ lic.customer.email }}</td>
-        <td>{{ lic.plan }}</td>
-        <td><span class="badge {{ lic.status }}">{{ lic.status }}</span></td>
-        <td class="muted">{{ lic.valid_until.strftime('%Y-%m-%d') }}</td>
-        <td>
-          {% if lic.status != 'revoked' %}
-          <form method="post" action="/admin/licenses/{{ lic.id }}/revoke" style="margin:0;display:inline;"
-                onsubmit="return confirm('revoke this license? it cannot be undone via the UI.');">
-            <button type="submit" class="btn danger">revoke</button>
-          </form>
-          {% endif %}
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  <form method="post" action="/admin/products/{{ product.slug }}/licenses/delete">
+    <p style="margin:0 0 .5em;">
+      <button type="submit" class="btn danger"
+              onclick="var n=document.querySelectorAll('input[name=license_ids]:checked').length; if(!n){alert('select at least one license to delete.');return false;} return confirm('delete '+n+' license(s)? this cannot be undone. audit trail (events) is preserved.');">
+        delete selected
+      </button>
+      <span class="muted" style="margin-left:.5em;">tick rows then click. installs are removed; events are kept with license_id nulled.</span>
+    </p>
+    <table>
+      <thead><tr>
+        <th style="width:1%;"><input type="checkbox" title="select all"
+              onclick="document.querySelectorAll('input[name=license_ids]').forEach(function(c){c.checked=this.checked}.bind(this))"></th>
+        <th>key</th><th>customer</th><th>plan</th><th>status</th><th>valid until</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for lic in licenses %}
+        <tr>
+          <td><input type="checkbox" name="license_ids" value="{{ lic.id }}"></td>
+          <td><code style="font-size:.85em;">{{ lic.key }}</code></td>
+          <td>{{ lic.customer.email }}</td>
+          <td>{{ lic.plan }}</td>
+          <td><span class="badge {{ lic.status }}">{{ lic.status }}</span></td>
+          <td class="muted">{{ lic.valid_until.strftime('%Y-%m-%d') }}</td>
+          <td>
+            {% if lic.status != 'revoked' %}
+            <button type="submit" class="btn muted"
+                    formaction="/admin/licenses/{{ lic.id }}/revoke"
+                    formnovalidate
+                    onclick="return confirm('revoke this license? clients will fail validation after the grace period.');">
+              revoke
+            </button>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </form>
   {% else %}
   <p class="muted">no licenses issued yet.</p>
   {% endif %}
