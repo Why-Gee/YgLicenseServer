@@ -152,6 +152,54 @@ def product_create(
     return RedirectResponse(f"/admin/products/{slug}", status_code=303)
 
 
+def _delete_product(db: Session, p: Product) -> int:
+    """Delete a product and everything under it. Returns license count killed.
+
+    Customers are NOT deleted (they may own licenses for other products on
+    this server). Events for this product survive with product_id NULL'd
+    so the audit trail still shows the historical activity.
+    """
+    licenses = db.query(License).filter_by(product_id=p.id).all()
+    license_count = len(licenses)
+    for lic in licenses:
+        _delete_license(db, lic)
+    db.add(Event(
+        type="product:deleted",
+        payload={
+            "product_id": p.id, "slug": p.slug, "name": p.name,
+            "license_count": license_count,
+        },
+        note="ui/delete",
+    ))
+    db.query(Event).filter_by(product_id=p.id).update({"product_id": None})
+    db.delete(p)
+    return license_count
+
+
+@router.post("/admin/products/delete")
+def products_bulk_delete(
+    request: Request,
+    product_slugs: list[str] = Form(default=[]),
+    db: Session = Depends(get_db),
+) -> Response:
+    _require_login(request)
+    if not product_slugs:
+        return RedirectResponse("/admin?error=no+products+selected", status_code=303)
+    deleted_products = 0
+    deleted_licenses = 0
+    for slug in product_slugs:
+        p = db.query(Product).filter_by(slug=slug).one_or_none()
+        if p is None:
+            continue
+        deleted_licenses += _delete_product(db, p)
+        deleted_products += 1
+    db.commit()
+    return RedirectResponse(
+        f"/admin?deleted_products={deleted_products}&deleted_licenses={deleted_licenses}",
+        status_code=303,
+    )
+
+
 @router.get("/admin/products/{slug}", response_class=HTMLResponse)
 def product_detail(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
     _require_login(request)
