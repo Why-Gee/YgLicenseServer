@@ -28,8 +28,13 @@
 
   <h3>Public Key</h3>
   <p class="muted">bake this into the client image at the path your client expects (e.g. <code>backend/app/licensing/keys/license_pub.pem</code>).</p>
-  <pre>{{ product.public_key_pem }}</pre>
-  <a class="btn" href="/admin/products/{{ product.slug }}/pubkey.pem">Download Pubkey.pem</a>
+  <pre id="pubkey-pem">{{ product.public_key_pem }}</pre>
+  <button type="button" class="btn muted" data-copy-from="#pubkey-pem" title="Copy public key to clipboard">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-2px;margin-right:.3em;" aria-hidden="true">
+      <path d="M5 0a2 2 0 0 0-2 2v1H2a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-1h1a2 2 0 0 0 2-2V5l-5-5H5zM4 3V2a1 1 0 0 1 1-1h5v3a2 2 0 0 0 2 2h3v5a1 1 0 0 1-1 1h-1V5l-5-5H4zm-2 2a1 1 0 0 1 1-1h5v3a2 2 0 0 0 2 2h3v5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5z"/>
+    </svg>Copy
+  </button>
+  <a class="btn" href="/admin/products/{{ product.slug }}/pubkey.pem" style="margin-left:.4em;">Download Pubkey.pem</a>
 </div>
 
 <div class="card">

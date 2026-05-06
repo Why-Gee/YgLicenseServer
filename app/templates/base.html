@@ -112,6 +112,37 @@
       });
     };
 
+    // Generic copy-to-clipboard. Any <button data-copy-from="#selector"> grabs
+    // the textContent of the matched element and writes it to the clipboard.
+    // Briefly swaps the button label to confirm. Falls back to a textarea +
+    // execCommand path for browsers that block clipboard API on http://.
+    document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        var src = document.querySelector(btn.dataset.copyFrom);
+        if (!src) return;
+        var text = src.textContent.trim();
+        var ok = false;
+        try {
+          await navigator.clipboard.writeText(text);
+          ok = true;
+        } catch (e) {
+          var ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+          document.body.removeChild(ta);
+        }
+        if (!ok) { alert('Could not copy. Select the text manually.'); return; }
+        var orig = btn.innerHTML;
+        btn.innerHTML = '✓ Copied';
+        btn.disabled = true;
+        setTimeout(function () { btn.innerHTML = orig; btn.disabled = false; }, 1500);
+      });
+    });
+
     // Auto-wires any <form class="bulk-form" data-name="..."> so its bulk-delete
     // button is hidden until at least one row is checked. Click runs a two-stage
     // modal confirm using data-confirm1-* and data-confirm2-* on the form.
