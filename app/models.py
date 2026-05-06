@@ -83,6 +83,12 @@ class License(Base):
     status: Mapped[str] = mapped_column(String(16), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+    # Optional outbound webhook. When set, LS POSTs status-change / delete
+    # events to webhook_url, signed with webhook_secret (HMAC-SHA256). Lets
+    # the customer react to admin actions instantly instead of polling.
+    webhook_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    webhook_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     product: Mapped[Product] = relationship(back_populates="licenses")
     customer: Mapped[Customer] = relationship(back_populates="licenses")
     installs: Mapped[list[Install]] = relationship(back_populates="license")

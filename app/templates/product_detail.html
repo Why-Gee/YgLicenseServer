@@ -5,10 +5,20 @@
 <h1>{{ product.name }} <code style="font-size:.6em;">{{ product.slug }}</code></h1>
 
 {% if request.query_params.get('issued') %}
-<div class="success">license issued. find the key in the table below — copy it now (we don't show it again in plain text).</div>
+<div class="success">license issued. find the key in the table below — copy it now (we don't show it again in plain text). if a webhook URL was set, the signing secret is shown below the row and is also only displayed once.</div>
 {% endif %}
 {% if request.query_params.get('deleted') %}
 <div class="success">deleted {{ request.query_params.get('deleted') }} license(s). audit trail preserved in events.</div>
+{% endif %}
+{% if request.query_params.get('webhook_lid') %}
+<div class="success">webhook configuration updated. if you set/rotated the URL or secret, the new signing secret is shown below the row — copy it now.</div>
+{% endif %}
+{% if request.query_params.get('webhook_test_lid') %}
+{% if request.query_params.get('webhook_test_ok') == '1' %}
+<div class="success">test webhook delivered (HTTP {{ request.query_params.get('webhook_test_status') }}).</div>
+{% else %}
+<div class="error">test webhook failed (HTTP {{ request.query_params.get('webhook_test_status') or 'no response' }}). check the receiver and the engine log for details.</div>
+{% endif %}
 {% endif %}
 {% if request.query_params.get('error') %}
 <div class="error">{{ request.query_params.get('error') }}</div>
@@ -47,6 +57,11 @@
     <div style="grid-column:1/-1;">
       <label>Features (JSON)</label>
       <input name="features_json" value='{"chat_agent": true}' placeholder='{"chat_agent":true,"no_ads":false}'>
+    </div>
+    <div style="grid-column:1/-1;">
+      <label>Webhook URL (Optional)</label>
+      <input name="webhook_url" type="url" placeholder="https://customer.example.com/api/license/webhook">
+      <small class="muted">if set, LS POSTs license events here (status changes, deletes) signed with HMAC. signing secret is generated + shown once after issuance.</small>
     </div>
     <div style="grid-column:1/-1;"><button type="submit">Issue License</button></div>
   </form>
@@ -106,10 +121,55 @@
             {% endif %}
           </td>
         </tr>
+        <tr style="background:rgba(255,255,255,.02);">
+          <td></td>
+          <td colspan="6" style="padding-top:.3em;padding-bottom:.7em;">
+            <details {% if request.query_params.get('webhook_lid') == lic.id or (request.query_params.get('issued') == lic.id and lic.webhook_url) or request.query_params.get('webhook_test_lid') == lic.id %}open{% endif %}>
+              <summary class="muted" style="cursor:pointer;font-size:.85em;">
+                Webhook:
+                {% if lic.webhook_url %}<code style="font-size:.85em;">{{ lic.webhook_url }}</code>{% else %}<em>not configured</em>{% endif %}
+              </summary>
+              {# Show the secret only when this row was just issued / updated / rotated #}
+              {% if (request.query_params.get('issued') == lic.id or request.query_params.get('webhook_lid') == lic.id) and lic.webhook_secret %}
+              <p class="muted" style="margin:.5em 0 .25em;font-size:.85em;">Signing secret (copy now — won't be shown again):</p>
+              <pre id="whsec-{{ lic.id }}" style="font-size:.8em;margin:0;">{{ lic.webhook_secret }}</pre>
+              <button type="button" class="btn muted" data-copy-from="#whsec-{{ lic.id }}" style="margin-top:.3em;font-size:.85em;padding:.2em .6em;">Copy Secret</button>
+              {% endif %}
+              <div style="margin-top:.6em;display:flex;gap:.4em;align-items:center;flex-wrap:wrap;">
+                <input type="url" name="webhook_url_{{ lic.id }}"
+                       form="webhook-form-{{ lic.id }}"
+                       value="{{ lic.webhook_url or '' }}"
+                       placeholder="https://customer.example.com/api/license/webhook"
+                       style="flex:1;min-width:300px;font-size:.85em;padding:.3em .5em;">
+                <button type="submit" class="btn muted" form="webhook-form-{{ lic.id }}"
+                        formaction="/admin/licenses/{{ lic.id }}/webhook"
+                        formnovalidate
+                        style="font-size:.85em;padding:.3em .8em;">{{ 'Update' if lic.webhook_url else 'Set' }}</button>
+                {% if lic.webhook_url %}
+                <button type="submit" class="btn muted" form="webhook-form-{{ lic.id }}"
+                        formaction="/admin/licenses/{{ lic.id }}/webhook/test"
+                        formnovalidate
+                        style="font-size:.85em;padding:.3em .8em;"
+                        title="Send a synthetic license.test event to the URL">Test</button>
+                <label class="muted" style="font-size:.8em;display:inline-flex;align-items:center;gap:.2em;margin:0;">
+                  <input type="checkbox" form="webhook-form-{{ lic.id }}" name="rotate_secret" value="1" style="width:auto;margin:0;"> rotate secret
+                </label>
+                <span class="muted" style="font-size:.8em;">to clear: empty the URL and click Update.</span>
+                {% endif %}
+              </div>
+            </details>
+          </td>
+        </tr>
       {% endfor %}
       </tbody>
     </table>
   </form>
+  {# Per-license webhook forms defined OUTSIDE the bulk-delete form (HTML
+     forms can't nest). Inputs/buttons inside the table opt in via the
+     `form="webhook-form-<id>"` attribute. #}
+  {% for lic in licenses %}
+  <form id="webhook-form-{{ lic.id }}" method="post" style="display:none;"></form>
+  {% endfor %}
   {% else %}
   <p class="muted">no licenses issued yet.</p>
   {% endif %}

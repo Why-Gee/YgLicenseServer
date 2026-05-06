@@ -17,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 from itsdangerous import BadSignature, URLSafeSerializer
 from sqlalchemy.orm import Session
 
+from app import webhooks as wh
 from app.config import get_settings
 from app.db import get_db
 from app.models import Customer, Event, Install, License, Product
@@ -244,6 +245,7 @@ def license_issue(
     max_users: int = Form(10),
     valid_days: int = Form(365),
     features_json: str = Form("{}"),
+    webhook_url: str = Form(""),
     db: Session = Depends(get_db),
 ) -> Response:
     _require_login(request)
@@ -266,6 +268,8 @@ def license_issue(
         db.add(cust)
         db.flush()
     key = f"{p.key_prefix}_" + secrets.token_urlsafe(32)
+    webhook_url_clean = webhook_url.strip() or None
+    webhook_secret_value = wh.generate_secret() if webhook_url_clean else None
     lic = License(
         product_id=p.id,
         customer_id=cust.id,
@@ -275,11 +279,13 @@ def license_issue(
         features=features,
         valid_until=datetime.utcnow() + timedelta(days=valid_days),
         status="active",
+        webhook_url=webhook_url_clean,
+        webhook_secret=webhook_secret_value,
     )
     db.add(lic)
     db.add(Event(
         license_id=lic.id, product_id=p.id, type="issued",
-        payload={"plan": plan}, note="ui/issue",
+        payload={"plan": plan, "webhook": bool(webhook_url_clean)}, note="ui/issue",
     ))
     db.commit()
     return RedirectResponse(
@@ -287,12 +293,80 @@ def license_issue(
     )
 
 
+@router.post("/admin/licenses/{lid}/webhook")
+def license_webhook_update(
+    lid: str,
+    request: Request,
+    webhook_url: str = Form(""),
+    rotate_secret: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Set / change / clear the webhook URL on an existing license.
+    `rotate_secret=1` regenerates the signing secret (use after the customer
+    rotates their receiver key)."""
+    _require_login(request)
+    lic = db.query(License).filter_by(id=lid).one_or_none()
+    if lic is None:
+        raise HTTPException(status_code=404)
+    new_url = webhook_url.strip() or None
+    if new_url:
+        if lic.webhook_url != new_url or rotate_secret == "1" or not lic.webhook_secret:
+            lic.webhook_secret = wh.generate_secret()
+        lic.webhook_url = new_url
+    else:
+        lic.webhook_url = None
+        lic.webhook_secret = None
+    db.add(Event(
+        license_id=lic.id, product_id=lic.product_id, type="webhook:updated",
+        payload={"set": bool(new_url)}, note="ui/webhook",
+    ))
+    db.commit()
+    return RedirectResponse(
+        f"/admin/products/{lic.product.slug}?webhook_lid={lic.id}", status_code=303
+    )
+
+
+@router.post("/admin/licenses/{lid}/webhook/test")
+def license_webhook_test(lid: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    """Send a synthetic license.status.changed event to the configured URL.
+    Useful right after issuance to confirm the customer's receiver works."""
+    _require_login(request)
+    lic = db.query(License).filter_by(id=lid).one_or_none()
+    if lic is None:
+        raise HTTPException(status_code=404)
+    if not lic.webhook_url or not lic.webhook_secret:
+        return RedirectResponse(
+            f"/admin/products/{lic.product.slug}?error=no+webhook+configured",
+            status_code=303,
+        )
+    ok, status, err = wh.deliver(
+        url=lic.webhook_url, secret=lic.webhook_secret,
+        event_type="license.test",
+        data={
+            "license_id": lic.id, "key": lic.key,
+            "product_slug": lic.product.slug,
+            "customer_email": lic.customer.email,
+            "test": True,
+        },
+    )
+    qs = (
+        f"webhook_test_lid={lic.id}&webhook_test_ok={int(ok)}"
+        f"&webhook_test_status={status or ''}"
+    )
+    return RedirectResponse(f"/admin/products/{lic.product.slug}?{qs}", status_code=303)
+
+
 def _set_license_status(db: Session, lic: License, new_status: str, note: str) -> None:
+    previous = lic.status
     lic.status = new_status
     db.add(Event(
         license_id=lic.id, product_id=lic.product_id,
         type=f"status:{new_status}", note=note,
     ))
+    db.flush()  # ensure status committed in-session before webhook reads it
+    # Best-effort outbound webhook. Fire-and-forget — failures are logged
+    # but never raised, so a webhook outage doesn't block admin actions.
+    wh.deliver_status_change(license_obj=lic, previous_status=previous)
 
 
 @router.post("/admin/licenses/{lid}/revoke")
@@ -334,17 +408,30 @@ def license_enable(lid: str, request: Request, db: Session = Depends(get_db)) ->
 
 
 def _delete_license(db: Session, lic: License) -> None:
+    # Snapshot fields BEFORE delete so we can fire the webhook with them
+    # afterwards (the License row is gone and lic.product / lic.customer
+    # become unreachable post-flush).
+    webhook_url = lic.webhook_url
+    webhook_secret = lic.webhook_secret
+    snapshot = {
+        "license_id": lic.id,
+        "key": lic.key,
+        "product_slug": lic.product.slug,
+        "customer_email": lic.customer.email,
+    }
     # Audit row first (with the key snapshot so a deleted-license trail still
     # tells you what was killed). Existing event rows for this license get
     # license_id NULL'd to preserve their history without a dangling FK.
     db.add(Event(
         product_id=lic.product_id, type="license:deleted",
-        payload={"license_id": lic.id, "key": lic.key, "customer": lic.customer.email},
-        note="ui/delete",
+        payload=snapshot, note="ui/delete",
     ))
     db.query(Event).filter_by(license_id=lic.id).update({"license_id": None})
     db.query(Install).filter_by(license_id=lic.id).delete()
     db.delete(lic)
+    # Best-effort outbound webhook for the deletion event.
+    if webhook_url and webhook_secret:
+        wh.deliver_deleted(webhook_url=webhook_url, webhook_secret=webhook_secret, **snapshot)
 
 
 @router.post("/admin/products/{slug}/licenses/delete")
