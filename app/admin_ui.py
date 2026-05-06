@@ -62,7 +62,7 @@ def root(request: Request) -> Response:
 @router.get("/admin/login", response_class=HTMLResponse)
 def login_form(request: Request, error: str | None = None) -> Response:
     return templates.TemplateResponse(
-        "login.html", {"request": request, "error": error}
+        request, "login.html", {"error": error}
     )
 
 
@@ -102,9 +102,9 @@ def dashboard(request: Request, db: Session = Depends(get_db)) -> Response:
         db.query(Event).order_by(Event.created_at.desc()).limit(20).all()
     )
     return templates.TemplateResponse(
+        request,
         "dashboard.html",
         {
-            "request": request,
             "products": products,
             "total_licenses": total_licenses,
             "active_licenses": active_licenses,
@@ -118,7 +118,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)) -> Response:
 @router.get("/admin/products/new", response_class=HTMLResponse)
 def product_new_form(request: Request) -> Response:
     _require_login(request)
-    return templates.TemplateResponse("product_new.html", {"request": request})
+    return templates.TemplateResponse(request, "product_new.html")
 
 
 @router.post("/admin/products")
@@ -166,8 +166,8 @@ def product_detail(slug: str, request: Request, db: Session = Depends(get_db)) -
         .all()
     )
     return templates.TemplateResponse(
-        "product_detail.html",
-        {"request": request, "product": p, "licenses": licenses},
+        request, "product_detail.html",
+        {"product": p, "licenses": licenses},
     )
 
 
@@ -261,7 +261,7 @@ def customers_list(request: Request, db: Session = Depends(get_db)) -> Response:
     _require_login(request)
     rows = db.query(Customer).order_by(Customer.created_at.desc()).all()
     return templates.TemplateResponse(
-        "customers.html", {"request": request, "customers": rows}
+        request, "customers.html", {"customers": rows}
     )
 
 
@@ -270,5 +270,5 @@ def events_list(request: Request, db: Session = Depends(get_db)) -> Response:
     _require_login(request)
     rows = db.query(Event).order_by(Event.created_at.desc()).limit(500).all()
     return templates.TemplateResponse(
-        "events.html", {"request": request, "events": rows}
+        request, "events.html", {"events": rows}
     )
