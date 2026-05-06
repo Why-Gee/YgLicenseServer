@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}events{% endblock %}
+{% block title %}Events{% endblock %}
 {% block content %}
-<h1>events</h1>
+<h1>Events</h1>
 <div class="card">
   {% if events %}
   <table>
-    <thead><tr><th>when</th><th>type</th><th>license</th><th>note</th></tr></thead>
+    <thead><tr><th>When</th><th>Type</th><th>License</th><th>Note</th></tr></thead>
     <tbody>
     {% for e in events %}
       <tr>
