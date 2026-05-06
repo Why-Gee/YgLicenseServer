@@ -78,7 +78,9 @@ class License(Base):
     max_users: Mapped[int] = mapped_column(Integer, default=10)
     features: Mapped[dict] = mapped_column(JSON, default=dict)
     valid_until: Mapped[datetime] = mapped_column(DateTime)
-    status: Mapped[str] = mapped_column(String(16), default="active")  # active | delinquent | revoked
+    # Allowed values: active | delinquent | disabled | revoked.
+    # disabled = soft toggle (admin can re-enable). revoked = intended permanent.
+    status: Mapped[str] = mapped_column(String(16), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     product: Mapped[Product] = relationship(back_populates="licenses")

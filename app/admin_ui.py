@@ -287,17 +287,48 @@ def license_issue(
     )
 
 
+def _set_license_status(db: Session, lic: License, new_status: str, note: str) -> None:
+    lic.status = new_status
+    db.add(Event(
+        license_id=lic.id, product_id=lic.product_id,
+        type=f"status:{new_status}", note=note,
+    ))
+
+
 @router.post("/admin/licenses/{lid}/revoke")
 def license_revoke(lid: str, request: Request, db: Session = Depends(get_db)) -> Response:
     _require_login(request)
     lic = db.query(License).filter_by(id=lid).one_or_none()
     if lic is None:
         raise HTTPException(status_code=404)
-    lic.status = "revoked"
-    db.add(Event(
-        license_id=lic.id, product_id=lic.product_id, type="status:revoked",
-        note="ui/revoke",
-    ))
+    _set_license_status(db, lic, "revoked", "ui/revoke")
+    db.commit()
+    return RedirectResponse(f"/admin/products/{lic.product.slug}", status_code=303)
+
+
+@router.post("/admin/licenses/{lid}/disable")
+def license_disable(lid: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    """Soft-toggle off. Distinct from revoke — can be flipped back via /enable.
+    Same effect on /v1/check while disabled (401 reason=disabled)."""
+    _require_login(request)
+    lic = db.query(License).filter_by(id=lid).one_or_none()
+    if lic is None:
+        raise HTTPException(status_code=404)
+    _set_license_status(db, lic, "disabled", "ui/disable")
+    db.commit()
+    return RedirectResponse(f"/admin/products/{lic.product.slug}", status_code=303)
+
+
+@router.post("/admin/licenses/{lid}/enable")
+def license_enable(lid: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    """Flip a disabled or revoked license back to active. ASM clients drop
+    upstream_rejected on the next /v1/check (every 24h via Celery beat, or
+    immediately on backend restart)."""
+    _require_login(request)
+    lic = db.query(License).filter_by(id=lid).one_or_none()
+    if lic is None:
+        raise HTTPException(status_code=404)
+    _set_license_status(db, lic, "active", "ui/enable")
     db.commit()
     return RedirectResponse(f"/admin/products/{lic.product.slug}", status_code=303)
 
