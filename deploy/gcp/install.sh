@@ -81,8 +81,18 @@ caddy validate --config /etc/caddy/Caddyfile
 systemctl restart caddy
 
 echo "==> install license-server systemd unit"
-sed "s|\${IMAGE}|$IMAGE|g" "$SCRIPT_DIR/yg-license-server.service" \
-  > /etc/systemd/system/yg-license-server.service
+# Copy the unit verbatim -- ${IMAGE} stays as a systemd placeholder and is
+# resolved at runtime from the env file. That way `deploy.ps1` can push a
+# new tag + `systemctl restart` will docker-pull it without re-running
+# install.sh or editing the unit on disk.
+install -m 0644 "$SCRIPT_DIR/yg-license-server.service" /etc/systemd/system/yg-license-server.service
+
+# Make sure IMAGE is in the env file (since the unit reads it from there).
+# Idempotent: if IMAGE is already set, leave it alone.
+if ! grep -q '^IMAGE=' "$ENV_DIR/yg-license-server.env"; then
+  echo "IMAGE=$IMAGE" >> "$ENV_DIR/yg-license-server.env"
+  echo "    added IMAGE=$IMAGE to $ENV_DIR/yg-license-server.env"
+fi
 
 echo "==> install duckdns updater"
 install -m 0755 "$SCRIPT_DIR/duckdns-update.sh" /usr/local/bin/duckdns-update.sh
