@@ -8,7 +8,9 @@
 # Adapted from AiDatabase/_engine_lib.ps1 for LicenseServer:
 #   - Module: app.main:app
 #   - Health: GET /health
-#   - Port env var: APP_PORT, default 8800 (matches Dockerfile EXPOSE)
+#   - Port env var: APP_PORT, default 8540 (the deployed Docker image uses 8800
+#     internally; that's behind Caddy on the VM and never exposed). 8540 is
+#     unclaimed by common dev services -- no Ethereum-JSON-RPC (8545) collision.
 
 function Expand-EnvVarRefs {
     # Expand ${VAR} (POSIX, matches python-dotenv) and %VAR% (Windows) against
@@ -56,12 +58,12 @@ function Import-DotEnv {
 }
 
 function Resolve-EnginePort {
-    # Resolution order: explicit -Port arg > $env:APP_PORT > default 8800.
+    # Resolution order: explicit -Port arg > $env:APP_PORT > default 8540.
     # Returns a string (uvicorn arg form).
     param([int]$ExplicitPort = 0)
     if ($ExplicitPort -gt 0) { return "$ExplicitPort" }
     if ($env:APP_PORT)       { return $env:APP_PORT }
-    return "8800"
+    return "8540"
 }
 
 function Get-EnginePidFilePath {
