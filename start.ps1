@@ -154,7 +154,34 @@ try {
     $port  = Resolve-EnginePort -ExplicitPort $Port
     $level = if ($env:LOG_LEVEL) { $env:LOG_LEVEL } else { "info" }
 
-    Write-Host "Pre-start cleanup..."
+    # Detect prior instance and report. Invoke-RepoSweep is idempotent --
+    # safe to run when there's nothing to clean -- but the user sees what
+    # was found (pid file, port holders, none).
+    $priorPidFile = Get-EnginePidFilePath -RepoRoot $root
+    $priorPid = 0
+    if (Test-Path $priorPidFile) {
+        [int]::TryParse((Get-Content -LiteralPath $priorPidFile -ErrorAction SilentlyContinue | Select-Object -First 1), [ref]$priorPid) | Out-Null
+    }
+    $priorAlive = $false
+    if ($priorPid -gt 0) {
+        $priorAlive = [bool](Get-Process -Id $priorPid -ErrorAction SilentlyContinue)
+    }
+    $portHolders = @()
+    try {
+        $portHolders = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique | Where-Object { $_ -and $_ -ne 0 })
+    } catch {}
+
+    if ($priorAlive -or $portHolders.Count -gt 0) {
+        if ($priorAlive) {
+            Write-Host "Found running engine (pid $priorPid from .engine.pid) -- shutting it down before starting a new one."
+        } else {
+            $holdersStr = ($portHolders -join ", ")
+            Write-Host "Port $port already in use (pid(s): $holdersStr) -- shutting them down before starting a new one."
+        }
+    } else {
+        Write-Host "No prior instance on port $port -- proceeding."
+    }
     Invoke-RepoSweep -RepoRoot $root -PortStr $port
 
     # ── Feature summary ──────────────────────────────────────────────────────
