@@ -65,16 +65,44 @@ try {
         exit 1
     }
 
-    Import-DotEnv -Path (Join-Path $root ".env")
+    # First-run UX: if no .env exists, generate one with fresh random tokens.
+    # Sane local-dev defaults (COOKIE_SECURE=false so http://localhost works).
+    # User can edit afterwards; we never overwrite an existing .env.
+    $envPath = Join-Path $root ".env"
+    if (-not (Test-Path $envPath)) {
+        Write-Host "No .env found -- generating one with fresh random tokens..."
+        $tokens = & $python -c "import secrets;print(secrets.token_urlsafe(32));print(secrets.token_urlsafe(32))" 2>&1
+        $tokenLines = @($tokens) | Where-Object { $_ -and $_.ToString().Length -ge 30 }
+        if ($tokenLines.Count -lt 2) {
+            Write-Error "Failed to generate tokens. python output: $tokens"
+            exit 1
+        }
+        $adminTok = $tokenLines[0].ToString().Trim()
+        $sessTok  = $tokenLines[1].ToString().Trim()
+        $envContent = @(
+            "# Auto-generated on first run. Edit freely; .env is gitignored.",
+            "ADMIN_TOKEN=$adminTok",
+            "SESSION_SECRET=$sessTok",
+            "DATABASE_URL=sqlite:///./license.db",
+            "COOKIE_SECURE=false",
+            "APP_PORT=8540",
+            "RESEND_API_KEY=",
+            "EMAIL_FROM=onboarding@resend.dev",
+            ""
+        ) -join "`r`n"
+        [System.IO.File]::WriteAllText($envPath, $envContent, [System.Text.Encoding]::ASCII)
+        Write-Host "Created $envPath -- save the ADMIN_TOKEN, you'll need it to log into /admin."
+    }
+
+    Import-DotEnv -Path $envPath
 
     # ── Pre-flight checks ────────────────────────────────────────────────────
     $errors = @()
     $warnings = @()
 
     if ([string]::IsNullOrWhiteSpace($env:ADMIN_TOKEN)) {
-        $errors += "ADMIN_TOKEN is not set. Generate one with:`n" +
-                   "  python -c `"import secrets; print(secrets.token_urlsafe(32))`"`n" +
-                   "Then add to .env: ADMIN_TOKEN=<value>"
+        $errors += "ADMIN_TOKEN is not set in $envPath. Add ADMIN_TOKEN=<value> -- generate via:`n" +
+                   "  python -c `"import secrets; print(secrets.token_urlsafe(32))`""
     } elseif ($env:ADMIN_TOKEN.Length -lt 16) {
         $errors += "ADMIN_TOKEN must be at least 16 chars (anything shorter is brute-forceable)."
     } elseif ($env:ADMIN_TOKEN.Length -lt 32) {
