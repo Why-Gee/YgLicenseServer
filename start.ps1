@@ -18,16 +18,52 @@ try {
 
     . (Join-Path $root "_engine_lib.ps1")
 
-    $pip    = Join-Path $root ".venv\Scripts\pip.exe"
-    $python = Join-Path $root ".venv\Scripts\python.exe"
+    $venv   = Join-Path $root ".venv"
+    $python = Join-Path $venv "Scripts\python.exe"
+    $pip    = Join-Path $venv "Scripts\pip.exe"
 
-    if (-not (Test-Path $python)) {
+    # Detect a stale/relocated .venv: pip.exe (and other Scripts wrappers)
+    # have the python.exe path baked-in at venv creation time. If the repo
+    # is later renamed or moved on disk, these wrappers fail with "Fatal
+    # error in launcher: Unable to create process". python.exe itself still
+    # runs (it's not a launcher), so we probe pip.exe specifically.
+    $venvBroken = $false
+    if ((Test-Path $python) -and (Test-Path $pip)) {
+        $probe = & $pip --version 2>&1 | Out-String
+        if ($probe -match 'Fatal error in launcher' -or $probe -match 'cannot find the file') {
+            Write-Warning ".venv looks relocated (pip.exe launcher broken). Recreating."
+            $venvBroken = $true
+        }
+    }
+
+    if ((-not (Test-Path $python)) -or $venvBroken) {
+        if ($venvBroken) {
+            Remove-Item -LiteralPath $venv -Recurse -Force -ErrorAction SilentlyContinue
+        }
         Write-Host "Creating .venv..."
-        & python -m venv (Join-Path $root ".venv")
+        & python -m venv $venv
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "python -m venv failed (exit $LASTEXITCODE). Is 'python' on PATH?"
+            exit 1
+        }
     }
 
     Write-Host "Installing dependencies..."
-    & $pip install -e ".[dev]" --quiet
+    # Use `python -m pip` not `& $pip` -- pip.exe is a launcher with the
+    # python.exe path baked in, which breaks if .venv ever gets relocated.
+    # Capture stdout+stderr so PowerShell doesn't surface pip's normal stderr
+    # (deprecation notices etc.) as NativeCommandError after the script ends.
+    # Check $LASTEXITCODE explicitly.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $pipOutput = & $python -m pip install -e ".[dev]" --quiet --disable-pip-version-check 2>&1
+    $pipExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP
+    if ($pipExit -ne 0) {
+        Write-Host ($pipOutput | Out-String)
+        Write-Error "pip install failed (exit $pipExit)."
+        exit 1
+    }
 
     Import-DotEnv -Path (Join-Path $root ".env")
 

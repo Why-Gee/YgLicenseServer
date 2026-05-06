@@ -23,6 +23,11 @@ try {
 
     . (Join-Path $root "_engine_lib.ps1")
 
+    # Initialize $cleanup early so the trap below (declared at parse time,
+    # active for the entire try-block scope) can reference it safely even
+    # when a failure aborts before the real cleanup is wired up.
+    $cleanup = $null
+
     # ── 1. start engine ──────────────────────────────────────────────────────
     $startArgs = @()
     if ($Port -gt 0) { $startArgs += @('-Port', $Port) }
@@ -146,7 +151,7 @@ try {
         }
     }
 
-    trap { & $cleanup; break }
+    trap { if ($cleanup) { & $cleanup }; break }
 
     # ── 4. tail log ──────────────────────────────────────────────────────────
     Write-Host "Tailing $logPath (Ctrl+C to stop)..."
