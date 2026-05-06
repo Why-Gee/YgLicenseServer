@@ -12,3 +12,7 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 data/
+logs/
+.engine.pid
+.local-install.sh
+.local-fix.sh
