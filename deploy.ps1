@@ -116,9 +116,30 @@ if ($existing) {
     exit 1
 }
 
-# Required tools
+# Required tools. gcloud is often installed by winget without being added to
+# PATH -- probe the well-known install locations and prepend on-the-fly so
+# deploy works without the user fixing their PATH first.
+function Find-Gcloud {
+    if (Get-Command gcloud -ErrorAction SilentlyContinue) { return $true }
+    $candidates = @(
+        "$env:LOCALAPPDATA\Google\Cloud SDK\google-cloud-sdk\bin",
+        "$env:USERPROFILE\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin",
+        "${env:ProgramFiles(x86)}\Google\Cloud SDK\google-cloud-sdk\bin",
+        "$env:ProgramFiles\Google\Cloud SDK\google-cloud-sdk\bin"
+    )
+    foreach ($d in $candidates) {
+        if (Test-Path (Join-Path $d 'gcloud.cmd')) {
+            $env:Path = "$d;$env:Path"
+            Write-Host "  (gcloud not on PATH; auto-detected at $d)" -ForegroundColor DarkGray
+            return $true
+        }
+    }
+    return $false
+}
+
 foreach ($tool in @('git', 'gh', 'gcloud')) {
-    if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+    $found = if ($tool -eq 'gcloud') { Find-Gcloud } else { [bool](Get-Command $tool -ErrorAction SilentlyContinue) }
+    if (-not $found) {
         Write-Host "$tool not found in PATH." -ForegroundColor Red
         exit 1
     }
