@@ -135,6 +135,21 @@ try {
         exit 1
     }
 
+    # Schema migrations. The Docker image runs this in docker-entrypoint.sh;
+    # local dev needs an equivalent step before uvicorn boots. Idempotent --
+    # if already at head, alembic logs "no upgrade" and returns 0.
+    Write-Host "Running alembic upgrade head..."
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $alOut  = & $python -m alembic upgrade head 2>&1
+    $alExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP
+    if ($alExit -ne 0) {
+        Write-Host ($alOut | Out-String)
+        Write-Error "alembic upgrade head failed (exit $alExit)."
+        exit 1
+    }
+
     $host_ = if ($env:APP_HOST) { $env:APP_HOST } else { "127.0.0.1" }
     $port  = Resolve-EnginePort -ExplicitPort $Port
     $level = if ($env:LOG_LEVEL) { $env:LOG_LEVEL } else { "info" }
