@@ -17,25 +17,38 @@ Both are ASM-side changes — apply directly in the ASM repo.
 
 **File:** `backend/app/worker.py`
 
-**Change** (find the `refresh_license` entry in `beat_schedule`):
+**Step 1.** At the top of the file, alongside the existing `from celery.schedules import crontab` line, add:
 
 ```python
-# OLD
+import os
+from datetime import timedelta
+```
+
+**Step 2.** Above the `beat_schedule={...}` dict literal (still at module level, before the `Celery(...)` call's keyword arg), compute the interval:
+
+```python
+_license_refresh_min = int(os.environ.get("LICENSE_REFRESH_MINUTES", "1440"))  # default 1 day
+```
+
+**Step 3.** Inside `beat_schedule`, replace the `refresh_license` entry. **Before:**
+
+```python
 "refresh-license": {
     "task": "app.licensing.tasks.refresh_license",
     "schedule": crontab(hour=3, minute=0),  # daily at 03:00
 },
 ```
 
+**After:**
+
 ```python
-# NEW
-import os
-_refresh_min = int(os.environ.get("LICENSE_REFRESH_MINUTES", "1440"))  # default 1 day
 "refresh-license": {
     "task": "app.licensing.tasks.refresh_license",
-    "schedule": crontab(minute=f"*/{_refresh_min}") if _refresh_min < 60 else crontab(minute=0, hour=f"*/{_refresh_min // 60}"),
+    "schedule": timedelta(minutes=_license_refresh_min),
 },
 ```
+
+`timedelta` is the simplest celery-beat schedule — fires every N minutes regardless of wall-clock alignment. Works for any positive int, including non-multiples of 60.
 
 (For raanana-kfar-saba's env, set `LICENSE_REFRESH_MINUTES=5`.)
 
