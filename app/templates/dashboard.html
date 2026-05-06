@@ -26,18 +26,18 @@
     <a class="btn" href="/admin/products/new">+ new product</a>
   </div>
   {% if products %}
-  <form method="post" action="/admin/products/delete">
+  <form class="bulk-form" data-name="product_slugs" method="post"
+        action="/admin/products/delete">
     <p style="margin:.5em 0;">
-      <button type="submit" class="btn danger"
-              onclick="var n=document.querySelectorAll('input[name=product_slugs]:checked').length; if(!n){alert('select at least one product to delete.');return false;} return confirm('delete '+n+' product(s)? this also deletes ALL licenses under them and DESTROYS each product\'s Ed25519 keypair forever — clients with the old pubkey baked in will reject any future license you issue. cannot be undone.');">
-        delete selected
+      <button data-bulk-btn type="submit" class="btn danger" style="display:none"
+              onclick="var n=this.querySelector('[data-bulk-count]').textContent; if(!confirm('Delete '+n+' product(s)?')) return false; return confirm('Final confirmation. This DESTROYS each product\'s Ed25519 keypair forever and deletes ALL licenses + installs under them. Clients with the old pubkey baked in will reject any future license you issue under a re-created product of the same slug. Continue?');">
+        delete <span data-bulk-count>0</span> selected
       </button>
       <span class="muted" style="margin-left:.5em;">irreversible: kills the keypair, all licenses, all installs.</span>
     </p>
     <table>
       <thead><tr>
-        <th style="width:1%;"><input type="checkbox" title="select all"
-              onclick="document.querySelectorAll('input[name=product_slugs]').forEach(function(c){c.checked=this.checked}.bind(this))"></th>
+        <th style="width:1%;"><input type="checkbox" data-select-all title="select all"></th>
         <th>slug</th><th>name</th><th>prefix</th><th>licenses</th><th>created</th>
       </tr></thead>
       <tbody>

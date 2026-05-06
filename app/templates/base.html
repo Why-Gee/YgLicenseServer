@@ -56,5 +56,37 @@
   <main>
     {% block content %}{% endblock %}
   </main>
+  <script>
+    // Auto-wires any <form class="bulk-form" data-name="..."> so its bulk-delete
+    // button is hidden until at least one row is checked, and the count inside
+    // the button stays current. Pairs with [data-select-all] in the header and
+    // [data-bulk-btn] / [data-bulk-count] inside the button.
+    (function () {
+      document.querySelectorAll('form.bulk-form').forEach(function (form) {
+        var name = form.dataset.name;
+        var btn = form.querySelector('[data-bulk-btn]');
+        var counter = form.querySelector('[data-bulk-count]');
+        var selectAll = form.querySelector('input[type=checkbox][data-select-all]');
+        if (!btn || !counter) return;
+        function update() {
+          var n = form.querySelectorAll('input[name="' + name + '"]:checked').length;
+          btn.style.display = n ? '' : 'none';
+          counter.textContent = n;
+        }
+        form.addEventListener('change', function (e) {
+          if (e.target && (e.target.name === name || e.target === selectAll)) update();
+        });
+        if (selectAll) {
+          selectAll.addEventListener('click', function () {
+            form.querySelectorAll('input[name="' + name + '"]').forEach(function (c) {
+              c.checked = selectAll.checked;
+            });
+            update();
+          });
+        }
+        update();
+      });
+    })();
+  </script>
 </body>
 </html>
