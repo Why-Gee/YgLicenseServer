@@ -27,10 +27,14 @@
   </div>
   {% if products %}
   <form class="bulk-form" data-name="product_slugs" method="post"
-        action="/admin/products/delete">
+        action="/admin/products/delete"
+        data-confirm1-title="Delete {n} product(s)?"
+        data-confirm1-body="The selected product(s) and ALL licenses + installs under them will be removed. Audit-trail events are preserved."
+        data-confirm2-title="Final confirmation"
+        data-confirm2-body="This DESTROYS each product's Ed25519 keypair forever. Clients with the old pubkey baked into their image will reject every license you issue under a re-created product of the same slug. There is no recovery. Click Delete to proceed."
+        data-confirm2-label="Delete {n} product(s)">
     <p style="margin:.5em 0;">
-      <button data-bulk-btn type="submit" class="btn danger" style="display:none"
-              onclick="var n=this.querySelector('[data-bulk-count]').textContent; if(!confirm('Delete '+n+' product(s)?')) return false; return confirm('Final confirmation. This DESTROYS each product\'s Ed25519 keypair forever and deletes ALL licenses + installs under them. Clients with the old pubkey baked in will reject any future license you issue under a re-created product of the same slug. Continue?');">
+      <button data-bulk-btn type="submit" class="btn danger" style="display:none">
         delete <span data-bulk-count>0</span> selected
       </button>
       <span class="muted" style="margin-left:.5em;">irreversible: kills the keypair, all licenses, all installs.</span>

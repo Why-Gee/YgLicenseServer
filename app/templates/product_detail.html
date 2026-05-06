@@ -51,10 +51,14 @@
   <h3 style="margin-top:0;">licenses ({{ licenses | length }})</h3>
   {% if licenses %}
   <form class="bulk-form" data-name="license_ids" method="post"
-        action="/admin/products/{{ product.slug }}/licenses/delete">
+        action="/admin/products/{{ product.slug }}/licenses/delete"
+        data-confirm1-title="Delete {n} license(s)?"
+        data-confirm1-body="The selected license(s) will be removed. Installs under them will also be removed. Audit-trail events are preserved (with license_id set to null)."
+        data-confirm2-title="Are you sure?"
+        data-confirm2-body="This cannot be undone. Click Delete to permanently remove {n} license(s)."
+        data-confirm2-label="Delete {n} license(s)">
     <p style="margin:0 0 .5em;">
-      <button data-bulk-btn type="submit" class="btn danger" style="display:none"
-              onclick="var n=this.querySelector('[data-bulk-count]').textContent; if(!confirm('Delete '+n+' license(s)?')) return false; return confirm('Are you sure? This cannot be undone. Audit trail (events) is preserved.');">
+      <button data-bulk-btn type="submit" class="btn danger" style="display:none">
         delete <span data-bulk-count>0</span> selected
       </button>
       <span class="muted" style="margin-left:.5em;">tick rows then click. installs are removed; events are kept with license_id nulled.</span>

@@ -39,6 +39,12 @@
     .error { background:rgba(248,81,73,.1); border:1px solid var(--danger); padding:.7em 1em; border-radius:4px; color:var(--danger); margin:1em 0; }
     .success { background:rgba(63,185,80,.1); border:1px solid var(--ok); padding:.7em 1em; border-radius:4px; color:var(--ok); margin:1em 0; }
     .muted { color:var(--muted); }
+    .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; z-index:1000; }
+    .modal-card { background:var(--card); border:1px solid var(--bd); border-radius:8px; padding:1.5em; max-width:520px; width:calc(100% - 2em); box-shadow:0 12px 40px rgba(0,0,0,.6); }
+    .modal-card h3 { margin:0 0 .5em; }
+    .modal-card p { margin:.5em 0; color:var(--fg); }
+    .modal-card .step { color:var(--muted); font-size:.8em; text-transform:uppercase; letter-spacing:.05em; margin-bottom:.3em; }
+    .modal-actions { display:flex; gap:.6em; justify-content:flex-end; margin-top:1.2em; }
   </style>
 </head>
 <body>
@@ -56,11 +62,59 @@
   <main>
     {% block content %}{% endblock %}
   </main>
+
+  <!-- Reusable confirm modal. Hidden until window.confirmModal(...) shows it. -->
+  <div id="confirm-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="modal-card">
+      <div class="step" id="confirm-step"></div>
+      <h3 id="confirm-title"></h3>
+      <p id="confirm-body"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn muted" id="confirm-cancel">Cancel</button>
+        <button type="button" class="btn danger" id="confirm-ok">Continue</button>
+      </div>
+    </div>
+  </div>
+
   <script>
+    // Promise-based modal confirm. Replaces window.confirm for our destructive
+    // flows. Esc / clicking the backdrop = cancel; Enter = confirm.
+    window.confirmModal = function (opts) {
+      return new Promise(function (resolve) {
+        var ov = document.getElementById('confirm-modal');
+        document.getElementById('confirm-step').textContent = opts.step || '';
+        document.getElementById('confirm-title').textContent = opts.title || 'Confirm';
+        document.getElementById('confirm-body').textContent = opts.body || '';
+        var ok = document.getElementById('confirm-ok');
+        var cancel = document.getElementById('confirm-cancel');
+        ok.textContent = opts.confirmLabel || 'Continue';
+        ov.style.display = '';
+        function done(result) {
+          ov.style.display = 'none';
+          ok.removeEventListener('click', onOk);
+          cancel.removeEventListener('click', onCancel);
+          ov.removeEventListener('click', onBackdrop);
+          document.removeEventListener('keydown', onKey);
+          resolve(result);
+        }
+        function onOk()     { done(true); }
+        function onCancel() { done(false); }
+        function onBackdrop(e) { if (e.target === ov) done(false); }
+        function onKey(e) {
+          if (e.key === 'Escape') done(false);
+          else if (e.key === 'Enter') { e.preventDefault(); done(true); }
+        }
+        ok.addEventListener('click', onOk);
+        cancel.addEventListener('click', onCancel);
+        ov.addEventListener('click', onBackdrop);
+        document.addEventListener('keydown', onKey);
+        ok.focus();
+      });
+    };
+
     // Auto-wires any <form class="bulk-form" data-name="..."> so its bulk-delete
-    // button is hidden until at least one row is checked, and the count inside
-    // the button stays current. Pairs with [data-select-all] in the header and
-    // [data-bulk-btn] / [data-bulk-count] inside the button.
+    // button is hidden until at least one row is checked. Click runs a two-stage
+    // modal confirm using data-confirm1-* and data-confirm2-* on the form.
     (function () {
       document.querySelectorAll('form.bulk-form').forEach(function (form) {
         var name = form.dataset.name;
@@ -84,6 +138,29 @@
             update();
           });
         }
+        btn.addEventListener('click', async function (e) {
+          if (form.dataset.confirmed === '1') return;  // re-entry after modal -> let submit through
+          e.preventDefault();
+          var n = form.querySelectorAll('input[name="' + name + '"]:checked').length;
+          if (n === 0) return;
+          var fmt = function (s) { return (s || '').replace('{n}', n); };
+          var ok1 = await window.confirmModal({
+            step: 'step 1 of 2',
+            title: fmt(form.dataset.confirm1Title),
+            body: fmt(form.dataset.confirm1Body),
+            confirmLabel: 'Continue',
+          });
+          if (!ok1) return;
+          var ok2 = await window.confirmModal({
+            step: 'step 2 of 2 — final confirmation',
+            title: fmt(form.dataset.confirm2Title),
+            body: fmt(form.dataset.confirm2Body),
+            confirmLabel: fmt(form.dataset.confirm2Label) || 'Delete',
+          });
+          if (!ok2) return;
+          form.dataset.confirmed = '1';
+          form.submit();
+        });
         update();
       });
     })();
