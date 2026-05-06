@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ product.slug }}{% endblock %}
 {% block content %}
-<p class="muted"><a href="/admin">← dashboard</a></p>
+<p class="muted"><a href="/admin">← Dashboard</a></p>
 <h1>{{ product.name }} <code style="font-size:.6em;">{{ product.slug }}</code></h1>
 
 {% if request.query_params.get('issued') %}
@@ -15,40 +15,40 @@
 {% endif %}
 
 <div class="card">
-  <h3 style="margin-top:0;">product info</h3>
+  <h3 style="margin-top:0;">Product Info</h3>
   <table>
-    <tr><th style="width:160px;">key prefix</th><td><code>{{ product.key_prefix }}_…</code></td></tr>
-    <tr><th>JWT issuer</th><td><code>{{ product.jwt_issuer }}</code></td></tr>
-    <tr><th>stripe webhook</th><td>
-      {% if product.stripe_webhook_configured %}<span class="badge active">configured</span>
-      {% else %}<span class="badge revoked">not configured</span>{% endif %}
+    <tr><th style="width:160px;">Key Prefix</th><td><code>{{ product.key_prefix }}_…</code></td></tr>
+    <tr><th>JWT Issuer</th><td><code>{{ product.jwt_issuer }}</code></td></tr>
+    <tr><th>Stripe Webhook</th><td>
+      {% if product.stripe_webhook_configured %}<span class="badge active">Configured</span>
+      {% else %}<span class="badge revoked">Not Configured</span>{% endif %}
     </td></tr>
-    <tr><th>created</th><td class="muted">{{ product.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</td></tr>
+    <tr><th>Created</th><td class="muted">{{ product.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</td></tr>
   </table>
 
-  <h3>public key</h3>
+  <h3>Public Key</h3>
   <p class="muted">bake this into the client image at the path your client expects (e.g. <code>backend/app/licensing/keys/license_pub.pem</code>).</p>
   <pre>{{ product.public_key_pem }}</pre>
-  <a class="btn" href="/admin/products/{{ product.slug }}/pubkey.pem">download pubkey.pem</a>
+  <a class="btn" href="/admin/products/{{ product.slug }}/pubkey.pem">Download Pubkey.pem</a>
 </div>
 
 <div class="card">
-  <h3 style="margin-top:0;">issue a license</h3>
+  <h3 style="margin-top:0;">Issue a License</h3>
   <form method="post" action="/admin/products/{{ product.slug }}/licenses" style="display:grid;grid-template-columns:1fr 1fr;gap:.5em 1em;">
-    <div><label>customer email</label><input name="email" type="email" required></div>
-    <div><label>plan</label><input name="plan" value="standard" required></div>
-    <div><label>max users</label><input name="max_users" type="number" value="10" min="1"></div>
-    <div><label>valid days</label><input name="valid_days" type="number" value="365" min="1"></div>
+    <div><label>Customer Email</label><input name="email" type="email" required></div>
+    <div><label>Plan</label><input name="plan" value="standard" required></div>
+    <div><label>Max Users</label><input name="max_users" type="number" value="10" min="1"></div>
+    <div><label>Valid Days</label><input name="valid_days" type="number" value="365" min="1"></div>
     <div style="grid-column:1/-1;">
-      <label>features (json)</label>
+      <label>Features (JSON)</label>
       <input name="features_json" value='{"chat_agent": true}' placeholder='{"chat_agent":true,"no_ads":false}'>
     </div>
-    <div style="grid-column:1/-1;"><button type="submit">issue license</button></div>
+    <div style="grid-column:1/-1;"><button type="submit">Issue License</button></div>
   </form>
 </div>
 
 <div class="card">
-  <h3 style="margin-top:0;">licenses ({{ licenses | length }})</h3>
+  <h3 style="margin-top:0;">Licenses ({{ licenses | length }})</h3>
   {% if licenses %}
   <form class="bulk-form" data-name="license_ids" method="post"
         action="/admin/products/{{ product.slug }}/licenses/delete"
@@ -59,14 +59,14 @@
         data-confirm2-label="Delete {n} license(s)">
     <p style="margin:0 0 .5em;">
       <button data-bulk-btn type="submit" class="btn danger" style="display:none">
-        delete <span data-bulk-count>0</span> selected
+        Delete <span data-bulk-count>0</span> Selected
       </button>
       <span class="muted" style="margin-left:.5em;">tick rows then click. installs are removed; events are kept with license_id nulled.</span>
     </p>
     <table>
       <thead><tr>
-        <th style="width:1%;"><input type="checkbox" data-select-all title="select all"></th>
-        <th>key</th><th>customer</th><th>plan</th><th>status</th><th>valid until</th><th></th>
+        <th style="width:1%;"><input type="checkbox" data-select-all title="Select All"></th>
+        <th>Key</th><th>Customer</th><th>Plan</th><th>Status</th><th>Valid Until</th><th></th>
       </tr></thead>
       <tbody>
       {% for lic in licenses %}
@@ -83,7 +83,7 @@
                     formaction="/admin/licenses/{{ lic.id }}/revoke"
                     formnovalidate
                     onclick="return confirm('revoke this license? clients will fail validation after the grace period.');">
-              revoke
+              Revoke
             </button>
             {% endif %}
           </td>

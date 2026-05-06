@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}customers{% endblock %}
+{% block title %}Customers{% endblock %}
 {% block content %}
-<h1>customers</h1>
+<h1>Customers</h1>
 <div class="card">
   {% if customers %}
   <table>
-    <thead><tr><th>email</th><th>stripe id</th><th>licenses</th><th>created</th></tr></thead>
+    <thead><tr><th>Email</th><th>Stripe ID</th><th>Licenses</th><th>Created</th></tr></thead>
     <tbody>
     {% for c in customers %}
       <tr>

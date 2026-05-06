@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{% block title %}login{% endblock %}
+{% block title %}Log In{% endblock %}
 {% block content %}
 <div style="max-width:380px;margin:6em auto;">
   <h2>YgLicenseServer</h2>
   {% if error %}<div class="error">invalid token</div>{% endif %}
   <form method="post" action="/admin/login" class="card">
-    <label for="token">admin token</label>
+    <label for="token">Admin Token</label>
     <input id="token" name="token" type="password" autofocus required>
-    <button type="submit" style="margin-top:1em;width:100%;">log in</button>
+    <button type="submit" style="margin-top:1em;width:100%;">Log In</button>
   </form>
   <p class="muted" style="text-align:center;font-size:.85em;">
     set <code>ADMIN_TOKEN</code> on the server
