@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
-from app.models import Customer, Event, License, Product
+from app.models import Customer, Event, Install, License, Product
 from app.signing import generate_keypair
 
 router = APIRouter()
@@ -62,7 +62,7 @@ def root(request: Request) -> Response:
 @router.get("/admin/login", response_class=HTMLResponse)
 def login_form(request: Request, error: str | None = None) -> Response:
     return templates.TemplateResponse(
-        "login.html", {"request": request, "error": error}
+        request, "login.html", {"error": error}
     )
 
 
@@ -102,9 +102,9 @@ def dashboard(request: Request, db: Session = Depends(get_db)) -> Response:
         db.query(Event).order_by(Event.created_at.desc()).limit(20).all()
     )
     return templates.TemplateResponse(
+        request,
         "dashboard.html",
         {
-            "request": request,
             "products": products,
             "total_licenses": total_licenses,
             "active_licenses": active_licenses,
@@ -118,7 +118,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)) -> Response:
 @router.get("/admin/products/new", response_class=HTMLResponse)
 def product_new_form(request: Request) -> Response:
     _require_login(request)
-    return templates.TemplateResponse("product_new.html", {"request": request})
+    return templates.TemplateResponse(request, "product_new.html")
 
 
 @router.post("/admin/products")
@@ -152,6 +152,54 @@ def product_create(
     return RedirectResponse(f"/admin/products/{slug}", status_code=303)
 
 
+def _delete_product(db: Session, p: Product) -> int:
+    """Delete a product and everything under it. Returns license count killed.
+
+    Customers are NOT deleted (they may own licenses for other products on
+    this server). Events for this product survive with product_id NULL'd
+    so the audit trail still shows the historical activity.
+    """
+    licenses = db.query(License).filter_by(product_id=p.id).all()
+    license_count = len(licenses)
+    for lic in licenses:
+        _delete_license(db, lic)
+    db.add(Event(
+        type="product:deleted",
+        payload={
+            "product_id": p.id, "slug": p.slug, "name": p.name,
+            "license_count": license_count,
+        },
+        note="ui/delete",
+    ))
+    db.query(Event).filter_by(product_id=p.id).update({"product_id": None})
+    db.delete(p)
+    return license_count
+
+
+@router.post("/admin/products/delete")
+def products_bulk_delete(
+    request: Request,
+    product_slugs: list[str] = Form(default=[]),
+    db: Session = Depends(get_db),
+) -> Response:
+    _require_login(request)
+    if not product_slugs:
+        return RedirectResponse("/admin?error=no+products+selected", status_code=303)
+    deleted_products = 0
+    deleted_licenses = 0
+    for slug in product_slugs:
+        p = db.query(Product).filter_by(slug=slug).one_or_none()
+        if p is None:
+            continue
+        deleted_licenses += _delete_product(db, p)
+        deleted_products += 1
+    db.commit()
+    return RedirectResponse(
+        f"/admin?deleted_products={deleted_products}&deleted_licenses={deleted_licenses}",
+        status_code=303,
+    )
+
+
 @router.get("/admin/products/{slug}", response_class=HTMLResponse)
 def product_detail(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
     _require_login(request)
@@ -166,8 +214,8 @@ def product_detail(slug: str, request: Request, db: Session = Depends(get_db)) -
         .all()
     )
     return templates.TemplateResponse(
-        "product_detail.html",
-        {"request": request, "product": p, "licenses": licenses},
+        request, "product_detail.html",
+        {"product": p, "licenses": licenses},
     )
 
 
@@ -254,6 +302,48 @@ def license_revoke(lid: str, request: Request, db: Session = Depends(get_db)) ->
     return RedirectResponse(f"/admin/products/{lic.product.slug}", status_code=303)
 
 
+def _delete_license(db: Session, lic: License) -> None:
+    # Audit row first (with the key snapshot so a deleted-license trail still
+    # tells you what was killed). Existing event rows for this license get
+    # license_id NULL'd to preserve their history without a dangling FK.
+    db.add(Event(
+        product_id=lic.product_id, type="license:deleted",
+        payload={"license_id": lic.id, "key": lic.key, "customer": lic.customer.email},
+        note="ui/delete",
+    ))
+    db.query(Event).filter_by(license_id=lic.id).update({"license_id": None})
+    db.query(Install).filter_by(license_id=lic.id).delete()
+    db.delete(lic)
+
+
+@router.post("/admin/products/{slug}/licenses/delete")
+def licenses_bulk_delete(
+    slug: str,
+    request: Request,
+    license_ids: list[str] = Form(default=[]),
+    db: Session = Depends(get_db),
+) -> Response:
+    _require_login(request)
+    p = db.query(Product).filter_by(slug=slug).one_or_none()
+    if p is None:
+        raise HTTPException(status_code=404)
+    if not license_ids:
+        return RedirectResponse(
+            f"/admin/products/{slug}?error=no+licenses+selected", status_code=303
+        )
+    deleted = 0
+    for lid in license_ids:
+        lic = db.query(License).filter_by(id=lid, product_id=p.id).one_or_none()
+        if lic is None:
+            continue
+        _delete_license(db, lic)
+        deleted += 1
+    db.commit()
+    return RedirectResponse(
+        f"/admin/products/{slug}?deleted={deleted}", status_code=303
+    )
+
+
 # ----- customers / events --------------------------------------------------
 
 @router.get("/admin/customers", response_class=HTMLResponse)
@@ -261,7 +351,7 @@ def customers_list(request: Request, db: Session = Depends(get_db)) -> Response:
     _require_login(request)
     rows = db.query(Customer).order_by(Customer.created_at.desc()).all()
     return templates.TemplateResponse(
-        "customers.html", {"request": request, "customers": rows}
+        request, "customers.html", {"customers": rows}
     )
 
 
@@ -270,5 +360,5 @@ def events_list(request: Request, db: Session = Depends(get_db)) -> Response:
     _require_login(request)
     rows = db.query(Event).order_by(Event.created_at.desc()).limit(500).all()
     return templates.TemplateResponse(
-        "events.html", {"request": request, "events": rows}
+        request, "events.html", {"events": rows}
     )

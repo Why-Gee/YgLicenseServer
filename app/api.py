@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
+from app.email import send_license_email
 from app.models import Customer, Event, Install, License, Product
 from app.signing import generate_keypair, sign_license_jwt
 
@@ -269,6 +270,7 @@ def admin_issue(slug: str, body: IssueIn, db: Session = Depends(get_db)) -> Issu
     ))
     db.commit()
     db.refresh(lic)
+    send_license_email(to=cust.email, key=lic.key, product_name=p.name)
     return IssueOut(license_id=lic.id, key=lic.key, valid_until=lic.valid_until, product=p.slug)
 
 

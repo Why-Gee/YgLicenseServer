@@ -14,6 +14,8 @@ class Settings(BaseModel):
     session_secret: str = ""           # signs admin UI session cookies
     jwt_ttl_days: int = 7              # JWT cache TTL clients honor
     cookie_secure: bool = True         # set false only for local http://
+    resend_api_key: str = ""           # if unset, license emails are skipped (logged only)
+    email_from: str = "onboarding@resend.dev"  # Resend test sender; replace once domain verified
 
 
 @lru_cache(maxsize=1)
@@ -24,4 +26,6 @@ def get_settings() -> Settings:
         session_secret=os.environ.get("SESSION_SECRET", os.environ.get("ADMIN_TOKEN", "")),
         jwt_ttl_days=int(os.environ.get("JWT_TTL_DAYS", "7")),
         cookie_secure=os.environ.get("COOKIE_SECURE", "true").lower() in ("1", "true", "yes"),
+        resend_api_key=os.environ.get("RESEND_API_KEY", ""),
+        email_from=os.environ.get("EMAIL_FROM", "onboarding@resend.dev"),
     )
