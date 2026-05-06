@@ -36,6 +36,7 @@
     .badge.active { background:rgba(63,185,80,.15); color:var(--ok); }
     .badge.delinquent { background:rgba(248,81,73,.15); color:var(--danger); }
     .badge.revoked { background:#21262d; color:var(--muted); }
+    .badge.disabled { background:rgba(210,153,34,.15); color:#d29922; }
     .error { background:rgba(248,81,73,.1); border:1px solid var(--danger); padding:.7em 1em; border-radius:4px; color:var(--danger); margin:1em 0; }
     .success { background:rgba(63,185,80,.1); border:1px solid var(--ok); padding:.7em 1em; border-radius:4px; color:var(--ok); margin:1em 0; }
     .muted { color:var(--muted); }
@@ -111,6 +112,26 @@
         ok.focus();
       });
     };
+
+    // Generic single-step confirm. Any <button data-confirm-title="..."
+    // data-confirm-body="..." [data-confirm-label="..."]> shows the modal and,
+    // on OK, re-fires the click with a flag that bypasses this handler so
+    // native form-submit / formaction takes over. Use for revoke / disable /
+    // enable / any future single-action confirm.
+    document.querySelectorAll('button[data-confirm-title]').forEach(function (btn) {
+      btn.addEventListener('click', async function (e) {
+        if (btn.dataset.confirmed === '1') return;
+        e.preventDefault();
+        var ok = await window.confirmModal({
+          title: btn.dataset.confirmTitle,
+          body: btn.dataset.confirmBody || '',
+          confirmLabel: btn.dataset.confirmLabel || 'Continue',
+        });
+        if (!ok) return;
+        btn.dataset.confirmed = '1';
+        btn.click();
+      });
+    });
 
     // Generic copy-to-clipboard. Any <button data-copy-from="#selector"> grabs
     // the textContent of the matched element and writes it to the clipboard.

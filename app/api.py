@@ -61,6 +61,8 @@ def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> Che
         raise HTTPException(status_code=401, detail={"reason": "invalid_key"})
     if lic.status == "revoked":
         raise HTTPException(status_code=401, detail={"reason": "revoked"})
+    if lic.status == "disabled":
+        raise HTTPException(status_code=401, detail={"reason": "disabled"})
     if lic.valid_until < datetime.utcnow():
         raise HTTPException(status_code=401, detail={"reason": "expired"})
 
