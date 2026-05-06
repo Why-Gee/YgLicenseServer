@@ -183,8 +183,29 @@ if ($SkipCiWait) {
         }
         if (-not $runId) { throw "couldn't find release.yml run for $tag after 30s" }
         Write-Host "  watching run $runId..."
-        gh run watch $runId --exit-status
-        if ($LASTEXITCODE -ne 0) { throw "release CI failed (exit $LASTEXITCODE)" }
+        # `gh run watch` polls the API and dies on transient 504/5xx. Retry up
+        # to 3 times -- a 504 is almost never a real CI failure. After retries,
+        # fall back to polling the run's status field directly so a flaky API
+        # doesn't fail the whole release.
+        $watchOk = $false
+        for ($try = 1; $try -le 3 -and -not $watchOk; $try++) {
+            gh run watch $runId --exit-status
+            if ($LASTEXITCODE -eq 0) { $watchOk = $true; break }
+            Write-Host "  gh run watch exited $LASTEXITCODE (attempt $try/3); retrying in 5s..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 5
+        }
+        if (-not $watchOk) {
+            Write-Host "  gh run watch kept failing -- polling run status directly..." -ForegroundColor Yellow
+            for ($i = 0; $i -lt 60; $i++) {
+                $info = gh run view $runId --json status,conclusion 2>$null | ConvertFrom-Json
+                if ($info -and $info.status -eq 'completed') {
+                    if ($info.conclusion -ne 'success') { throw "release CI conclusion=$($info.conclusion)" }
+                    $watchOk = $true; break
+                }
+                Start-Sleep -Seconds 10
+            }
+            if (-not $watchOk) { throw "release CI didn't complete within 10min" }
+        }
     }
     Write-Host "[4/6] CI green, image ghcr.io/why-gee/yg-license-server:$tag published"
 }
