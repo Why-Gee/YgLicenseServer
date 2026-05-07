@@ -89,6 +89,7 @@
           <td style="white-space:nowrap;">
             {# Toggle: ON = status active. Click flips to /disable or /enable. #}
             {% set is_on = lic.status == 'active' %}
+            <span class="toggle-label">Enable</span>
             <button type="submit"
                     class="toggle-switch {{ 'on' if is_on else 'off' }}"
                     formaction="/admin/licenses/{{ lic.id }}/{{ 'disable' if is_on else 'enable' }}"
@@ -96,7 +97,6 @@
                     aria-pressed="{{ 'true' if is_on else 'false' }}"
                     aria-label="Toggle license enabled state"
                     title="{{ 'Click to disable' if is_on else 'Click to enable' }}"></button>
-            <span class="toggle-label">Enable</span>
             {# Edit pencil — opens modal pre-filled #}
             <button type="button" class="btn-icon"
                     data-license-modal="edit"
@@ -182,7 +182,13 @@
       <div style="grid-column:1/-1;border-top:1px solid var(--bd);padding-top:.7em;margin-top:.3em;">
         <label style="margin-top:0;font-weight:600;color:var(--fg);">Webhook (Optional)</label>
         <small class="muted" style="display:block;margin-bottom:.4em;">if set, LS POSTs license events here (status changes, deletes) signed with HMAC. signing secret is generated + shown once after issuance / rotation.</small>
-        <input id="lm-webhook-url" name="webhook_url" type="url" placeholder="https://customer.example.com/api/license/webhook">
+        <div style="display:flex;gap:.4em;align-items:stretch;">
+          <input id="lm-webhook-url" name="webhook_url" type="url" placeholder="https://customer.example.com/api/license/webhook" style="flex:1;">
+          <button type="submit" id="lm-test-btn" class="btn muted" style="display:none;white-space:nowrap;"
+                  formaction="" formnovalidate
+                  title="POST a synthetic license.test event to the saved URL using the persisted signing secret">Test</button>
+        </div>
+        <small id="lm-test-hint" class="muted" style="display:none;margin-top:.3em;">Test uses the saved URL + secret. To test a new URL, save first.</small>
       </div>
       <div id="lm-rotate-row" style="display:none;grid-column:1/-1;">
         <label style="display:inline-flex;align-items:center;gap:.4em;font-weight:normal;">
@@ -196,8 +202,6 @@
         <button type="button" class="btn muted" data-copy-from="#lm-secret" style="font-size:.85em;padding:.25em .7em;">Copy Secret</button>
       </div>
       <div class="modal-actions" style="grid-column:1/-1;">
-        <button type="submit" id="lm-test-btn" class="btn muted" style="display:none;margin-right:auto;"
-                formaction="" formnovalidate>Test Webhook</button>
         <button type="button" class="btn muted" id="lm-cancel">Cancel</button>
         <button type="submit" id="lm-submit" class="btn">Issue License</button>
       </div>
@@ -234,6 +238,7 @@
   var secretRow = document.getElementById('lm-secret-row');
   var secretEl = document.getElementById('lm-secret');
   var testBtn = document.getElementById('lm-test-btn');
+  var testHint = document.getElementById('lm-test-hint');
   var submitBtn = document.getElementById('lm-submit');
   var cancelBtn = document.getElementById('lm-cancel');
 
@@ -251,8 +256,11 @@
       submitBtn.textContent = 'Save Changes';
       form.action = '/admin/licenses/' + lic.id + '/edit';
       // Email is not editable post-issue (joined to customers table). Show
-      // it read-only as part of the key block.
+      // it read-only as part of the key block. Strip name + required from
+      // the hidden input so HTML5 validation doesn't silently block submit.
       emailRow.style.display = 'none';
+      emailIn.removeAttribute('name');
+      emailIn.removeAttribute('required');
       keyRow.style.display = '';
       keyEl.textContent = lic.key + '\n\n' + lic.email;
       planIn.value = lic.plan;
@@ -261,6 +269,7 @@
       validDaysIn.removeAttribute('name');
       validUntilWrap.style.display = '';
       validUntilIn.setAttribute('name', 'valid_until');
+      validUntilIn.setAttribute('required', '');
       validUntilIn.value = lic.valid_until;
       featIn.value = lic.features_json;
       whIn.value = lic.webhook_url || '';
@@ -277,14 +286,18 @@
       if (lic.webhook_url) {
         testBtn.style.display = '';
         testBtn.formAction = '/admin/licenses/' + lic.id + '/webhook/test';
+        testHint.style.display = '';
       } else {
         testBtn.style.display = 'none';
+        testHint.style.display = 'none';
       }
     } else {
       titleEl.textContent = 'Issue License';
       submitBtn.textContent = 'Issue License';
       form.action = '/admin/products/' + slug + '/licenses';
       emailRow.style.display = '';
+      emailIn.setAttribute('name', 'email');
+      emailIn.setAttribute('required', '');
       emailIn.value = '';
       keyRow.style.display = 'none';
       keyEl.textContent = '';
@@ -295,12 +308,14 @@
       validDaysIn.value = 365;
       validUntilWrap.style.display = 'none';
       validUntilIn.removeAttribute('name');
+      validUntilIn.removeAttribute('required');
       featIn.value = '{"chat_agent": true}';
       whIn.value = '';
       rotateRow.style.display = 'none';
       rotateCb.checked = false;
       secretRow.style.display = 'none';
       testBtn.style.display = 'none';
+      testHint.style.display = 'none';
     }
     ov.style.display = '';
     document.addEventListener('keydown', onKey);
