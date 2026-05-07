@@ -17,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 from itsdangerous import BadSignature, URLSafeSerializer
 from sqlalchemy.orm import Session
 
+from app import __version__
 from app import webhooks as wh
 from app.config import get_settings
 from app.db import get_db
@@ -26,6 +27,9 @@ from app.signing import generate_keypair
 router = APIRouter()
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+# Make __version__ available to all templates without threading through every
+# TemplateResponse context dict.
+templates.env.globals["app_version"] = __version__
 
 SESSION_COOKIE = "asm_ls_session"
 
