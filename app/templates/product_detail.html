@@ -160,7 +160,14 @@
 
 {# Reusable license modal — issue + edit + webhook config in one form. #}
 <div id="license-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="lm-title">
-  <div class="modal-card" style="max-width:640px;">
+  <div class="modal-card" style="max-width:640px;position:relative;">
+    <button type="button" id="lm-close" class="btn-icon"
+            style="position:absolute;top:.5em;right:.5em;color:var(--muted);"
+            title="Close" aria-label="Close">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8z"/>
+      </svg>
+    </button>
     {# In-modal flashes — the same redirects that auto-open this modal would
        otherwise drop the banner on the background page hidden under the
        overlay. Render here too so the admin sees the result inside the dialog. #}
@@ -228,6 +235,19 @@
   </div>
 </div>
 
+{# Unsaved-changes confirm. z-index above the license modal so it sits on top. #}
+<div id="discard-confirm" class="modal-overlay" style="display:none;z-index:1100;" role="dialog" aria-modal="true" aria-labelledby="dc-title">
+  <div class="modal-card" style="max-width:420px;">
+    <h3 id="dc-title" style="margin-top:0;">Unsaved Changes</h3>
+    <p>You have unsaved changes. Save them, discard them, or keep editing?</p>
+    <div class="modal-actions">
+      <button type="button" class="btn muted" id="dc-cancel">Cancel</button>
+      <button type="button" class="btn danger" id="dc-discard">Discard</button>
+      <button type="button" class="btn" id="dc-save">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function () {
   var dataEl = document.getElementById('licenses-data');
@@ -260,14 +280,83 @@
   var testHint = document.getElementById('lm-test-hint');
   var submitBtn = document.getElementById('lm-submit');
   var cancelBtn = document.getElementById('lm-cancel');
+  var closeBtn = document.getElementById('lm-close');
+
+  // Snapshot of form values right after open(). Compared on dismiss to
+  // detect unsaved changes. Captures the same fields the form submits.
+  var initialSnapshot = null;
+  function snapshot() {
+    return JSON.stringify({
+      email: emailIn.value,
+      plan: planIn.value,
+      max_users: maxIn.value,
+      valid_days: validDaysIn.value,
+      valid_until: validUntilIn.value,
+      features_json: featIn.value,
+      webhook_url: whIn.value,
+      rotate_secret: rotateCb.checked,
+    });
+  }
+  function isDirty() {
+    return initialSnapshot !== null && snapshot() !== initialSnapshot;
+  }
 
   function close() {
     ov.style.display = 'none';
     document.removeEventListener('keydown', onKey);
+    initialSnapshot = null;
   }
-  function onKey(e) { if (e.key === 'Escape') close(); }
-  cancelBtn.addEventListener('click', close);
-  ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+  function onKey(e) { if (e.key === 'Escape') attemptClose(); }
+
+  // 3-button confirm: cancel | discard | save. Higher z so it overlays the
+  // license modal. Shown only when isDirty() — clean dismisses skip it.
+  var dc = document.getElementById('discard-confirm');
+  var dcCancel = document.getElementById('dc-cancel');
+  var dcDiscard = document.getElementById('dc-discard');
+  var dcSave = document.getElementById('dc-save');
+  var dcOpen = false;
+  function dirtyConfirm() {
+    return new Promise(function (resolve) {
+      dcOpen = true;
+      function done(verdict) {
+        dc.style.display = 'none';
+        dcOpen = false;
+        dcCancel.removeEventListener('click', onCancel);
+        dcDiscard.removeEventListener('click', onDiscard);
+        dcSave.removeEventListener('click', onSave);
+        document.removeEventListener('keydown', onDcKey);
+        resolve(verdict);
+      }
+      function onCancel()  { done('cancel'); }
+      function onDiscard() { done('discard'); }
+      function onSave()    { done('save'); }
+      function onDcKey(e) {
+        if (e.key === 'Escape') { e.stopPropagation(); done('cancel'); }
+        else if (e.key === 'Enter') { e.preventDefault(); done('save'); }
+      }
+      dcCancel.addEventListener('click', onCancel);
+      dcDiscard.addEventListener('click', onDiscard);
+      dcSave.addEventListener('click', onSave);
+      document.addEventListener('keydown', onDcKey);
+      dc.style.display = '';
+      dcCancel.focus();
+    });
+  }
+
+  async function attemptClose() {
+    if (dcOpen) return;             // already prompting; ignore second trigger
+    if (!isDirty()) { close(); return; }
+    var v = await dirtyConfirm();
+    if (v === 'cancel') return;
+    if (v === 'discard') { close(); return; }
+    if (v === 'save') {
+      if (form.reportValidity()) form.submit();
+    }
+  }
+
+  cancelBtn.addEventListener('click', attemptClose);
+  closeBtn.addEventListener('click', attemptClose);
+  ov.addEventListener('click', function (e) { if (e.target === ov) attemptClose(); });
 
   function open(mode, lic) {
     if (mode === 'edit') {
@@ -338,6 +427,9 @@
     }
     ov.style.display = '';
     document.addEventListener('keydown', onKey);
+    // Snapshot AFTER all fields are populated so the "is dirty" comparison
+    // measures user changes, not the create/edit pre-fill.
+    initialSnapshot = snapshot();
     setTimeout(function () {
       (mode === 'edit' ? planIn : emailIn).focus();
     }, 50);
