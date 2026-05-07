@@ -16,3 +16,4 @@ logs/
 .engine.pid
 .local-install.sh
 .local-fix.sh
+.claude/

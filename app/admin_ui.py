@@ -312,6 +312,79 @@ def license_issue(
     )
 
 
+@router.post("/admin/licenses/{lid}/edit")
+def license_edit(
+    lid: str,
+    request: Request,
+    plan: str = Form(...),
+    max_users: int = Form(...),
+    valid_until: str = Form(...),
+    features_json: str = Form("{}"),
+    webhook_url: str = Form(""),
+    rotate_secret: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Edit an existing license — plan / max_users / valid_until / features
+    plus the per-license webhook config. Email + key are not editable.
+    Same redirect contract as /webhook update so the secret is shown once
+    when set or rotated."""
+    _require_login(request)
+    import json
+    lic = db.query(License).filter_by(id=lid).one_or_none()
+    if lic is None:
+        raise HTTPException(status_code=404)
+    try:
+        features = json.loads(features_json) if features_json.strip() else {}
+        if not isinstance(features, dict):
+            raise ValueError
+    except (ValueError, json.JSONDecodeError):
+        return RedirectResponse(
+            f"/admin/products/{lic.product.slug}?error=invalid+features+json",
+            status_code=303,
+        )
+    try:
+        # HTML <input type="date"> posts YYYY-MM-DD. datetime-local would post
+        # YYYY-MM-DDTHH:MM. Accept either.
+        if "T" in valid_until:
+            new_valid_until = datetime.fromisoformat(valid_until)
+        else:
+            new_valid_until = datetime.strptime(valid_until, "%Y-%m-%d")
+    except ValueError:
+        return RedirectResponse(
+            f"/admin/products/{lic.product.slug}?error=invalid+valid_until",
+            status_code=303,
+        )
+    lic.plan = plan
+    lic.max_users = max_users
+    lic.valid_until = new_valid_until
+    lic.features = features
+    new_url = webhook_url.strip() or None
+    secret_changed = False
+    if new_url:
+        if lic.webhook_url != new_url or rotate_secret == "1" or not lic.webhook_secret:
+            lic.webhook_secret = wh.generate_secret()
+            secret_changed = True
+        lic.webhook_url = new_url
+    else:
+        if lic.webhook_url is not None:
+            secret_changed = True  # cleared
+        lic.webhook_url = None
+        lic.webhook_secret = None
+    db.add(Event(
+        license_id=lic.id, product_id=lic.product_id, type="license:edited",
+        payload={"webhook": bool(new_url), "secret_changed": secret_changed},
+        note="ui/edit",
+    ))
+    db.commit()
+    # webhook_lid query param triggers the modal to auto-open with the secret
+    # pre revealed when one was set/rotated; otherwise just `edited` so the
+    # banner shows but the modal stays closed.
+    qp = "webhook_lid" if secret_changed and new_url else "edited"
+    return RedirectResponse(
+        f"/admin/products/{lic.product.slug}?{qp}={lic.id}", status_code=303
+    )
+
+
 @router.post("/admin/licenses/{lid}/webhook")
 def license_webhook_update(
     lid: str,
