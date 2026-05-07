@@ -131,17 +131,18 @@ Tests bypass alembic and call `db.init_db()` to set up an in-memory SQLite — f
 
 ## Versioning & releases
 
-SemVer. `app/__init__.py:__version__` is the source of truth — bump it together with `pyproject.toml:version` in the same commit.
+SemVer. `app/__init__.py:__version__` is the source of truth — bump it together with `pyproject.toml:version` in the same commit. **Whoever lands the feature owns the bump** — code change and version bump merge to `main` together.
 
-CI publishes a Docker image to GitHub Container Registry on every `v*.*.*` tag:
+CI publishes a Docker image to GitHub Container Registry on every `v*.*.*` tag.
 
-```sh
-# bump version, commit, then:
-git tag v0.3.0
-git push --tags
-# release.yml builds + pushes ghcr.io/why-gee/yg-license-server:v0.3.0 + :latest
-docker pull ghcr.io/why-gee/yg-license-server:v0.3.0
+```powershell
+# normal flow: version was bumped + merged in the feature PR; just ship it.
+./deploy.ps1
+# release.yml builds + pushes ghcr.io/why-gee/yg-license-server:vX.Y.Z + :latest,
+# then deploy.ps1 SSHes the GCP VM and restarts the service, then verifies /health.
 ```
+
+`-Patch`/`-Minor`/`-Major` are convenience flags if you want `deploy.ps1` to do the bump + commit itself instead of you doing it in the PR. Skip them in the normal "bump landed in the feature commit" flow.
 
 Branch protection on `main` (one-time setup in GitHub: *Settings → Branches → Add rule*) — require the `test` workflow green before merging.
 
