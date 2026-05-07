@@ -313,6 +313,36 @@ def license_issue(
     )
 
 
+def _apply_webhook_config(
+    lic: License, *, url: str | None, rotate: bool, mint_on_url_change: bool
+) -> None:
+    """Mutate `lic.webhook_url` + `lic.webhook_secret` per the rotate semantics.
+
+    Always mints a fresh secret when:
+      - `rotate=True` (caller explicitly asked), OR
+      - the license has no secret yet (first-time set), OR
+      - `mint_on_url_change=True` and the URL actually changed.
+
+    `mint_on_url_change=True` matches the UI handler's existing behavior:
+    clicking Update with a new URL implicitly rotates the secret. The JSON
+    API uses `mint_on_url_change=False` so callers control rotation.
+
+    `url=None` clears both fields. Caller commits the session.
+    """
+    if url:
+        should_mint = (
+            rotate
+            or not lic.webhook_secret
+            or (mint_on_url_change and lic.webhook_url != url)
+        )
+        if should_mint:
+            lic.webhook_secret = wh.generate_secret()
+        lic.webhook_url = url
+    else:
+        lic.webhook_url = None
+        lic.webhook_secret = None
+
+
 @router.post("/admin/licenses/{lid}/edit")
 def license_edit(
     lid: str,
@@ -360,17 +390,15 @@ def license_edit(
     lic.valid_until = new_valid_until
     lic.features = features
     new_url = webhook_url.strip() or None
-    secret_changed = False
-    if new_url:
-        if lic.webhook_url != new_url or rotate_secret == "1" or not lic.webhook_secret:
-            lic.webhook_secret = wh.generate_secret()
-            secret_changed = True
-        lic.webhook_url = new_url
-    else:
-        if lic.webhook_url is not None:
-            secret_changed = True  # cleared
-        lic.webhook_url = None
-        lic.webhook_secret = None
+    # Single source of truth -- same helper the dedicated /webhook handler
+    # and the JSON API path call. mint_on_url_change=True preserves the
+    # form-handler convention that changing the URL implicitly rotates.
+    # First-time set (no prior secret) auto-mints regardless of rotate.
+    prev_secret = lic.webhook_secret
+    _apply_webhook_config(
+        lic, url=new_url, rotate=rotate_secret == "1", mint_on_url_change=True
+    )
+    secret_changed = lic.webhook_secret != prev_secret
     db.add(Event(
         license_id=lic.id, product_id=lic.product_id, type="license:edited",
         payload={"webhook": bool(new_url), "secret_changed": secret_changed},
@@ -384,36 +412,6 @@ def license_edit(
     return RedirectResponse(
         f"/admin/products/{lic.product.slug}?{qp}={lic.id}", status_code=303
     )
-
-
-def _apply_webhook_config(
-    lic: License, *, url: str | None, rotate: bool, mint_on_url_change: bool
-) -> None:
-    """Mutate `lic.webhook_url` + `lic.webhook_secret` per the rotate semantics.
-
-    Always mints a fresh secret when:
-      - `rotate=True` (caller explicitly asked), OR
-      - the license has no secret yet (first-time set), OR
-      - `mint_on_url_change=True` and the URL actually changed.
-
-    `mint_on_url_change=True` matches the UI handler's existing behavior:
-    clicking Update with a new URL implicitly rotates the secret. The JSON
-    API uses `mint_on_url_change=False` so callers control rotation.
-
-    `url=None` clears both fields. Caller commits the session.
-    """
-    if url:
-        should_mint = (
-            rotate
-            or not lic.webhook_secret
-            or (mint_on_url_change and lic.webhook_url != url)
-        )
-        if should_mint:
-            lic.webhook_secret = wh.generate_secret()
-        lic.webhook_url = url
-    else:
-        lic.webhook_url = None
-        lic.webhook_secret = None
 
 
 @router.post("/admin/licenses/{lid}/webhook")

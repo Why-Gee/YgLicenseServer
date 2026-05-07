@@ -340,6 +340,112 @@ def test_delete_webhook_callback_sees_license_gone(
     assert body.get("detail", {}).get("reason") == "invalid_key", body
 
 
+# ---------- regression: form handlers auto-mint on first save -----------
+#
+# Bug report: "setting a webhook URL on a license that has no existing
+# secret doesn't mint one automatically -- the admin has to tick Rotate
+# and click Save again." The JSON API (POST /admin/api/.../webhook,
+# v0.6.0) already handled this via _apply_webhook_config; the form-driven
+# UI handlers must match. These tests pin both:
+#   - POST /admin/licenses/{lid}/webhook  (Update button in modal)
+#   - POST /admin/licenses/{lid}/edit     (Save / Apply button in modal)
+
+def _read_license(lid: str):
+    """Pull a fresh License row from the DB so assertions don't read a
+    stale object cached in the test's session."""
+    import app.db as db_mod
+    from app.models import License
+    with db_mod.SessionLocal() as session:
+        return (
+            session.query(License).filter_by(id=lid).one(),
+        )[0]
+
+
+def test_form_webhook_handler_auto_mints_on_first_save(
+    client: TestClient, monkeypatch
+) -> None:
+    """No prior URL, no prior secret. Admin pastes URL, leaves Rotate
+    unticked, clicks Update -> hits /admin/licenses/{lid}/webhook. The
+    handler must mint a secret without a second pass."""
+    _create_product(client)
+    lid = _issue_via_ui(client)  # no webhook_url
+    cookies = _admin_login(client)
+
+    # Pre-condition: no secret yet.
+    pre = _read_license(lid)
+    assert pre.webhook_url is None
+    assert pre.webhook_secret is None
+
+    r = client.post(
+        f"/admin/licenses/{lid}/webhook",
+        data={"webhook_url": "https://example.test/webhook"},  # no rotate_secret
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+
+    post = _read_license(lid)
+    assert post.webhook_url == "https://example.test/webhook"
+    assert post.webhook_secret is not None
+    assert post.webhook_secret.startswith("whsec_"), post.webhook_secret
+
+
+def test_form_edit_handler_auto_mints_on_first_save(
+    client: TestClient, monkeypatch
+) -> None:
+    """Same flow but via the Save Changes button (POST /edit). Used to be
+    inline duplicated logic; refactored to call _apply_webhook_config."""
+    _create_product(client)
+    lid = _issue_via_ui(client)
+    cookies = _admin_login(client)
+
+    pre = _read_license(lid)
+    assert pre.webhook_secret is None
+
+    # /edit takes the full license payload, not just webhook_url.
+    r = client.post(
+        f"/admin/licenses/{lid}/edit",
+        data={
+            "plan": pre.plan,
+            "max_users": str(pre.max_users),
+            "valid_until": pre.valid_until.strftime("%Y-%m-%d"),
+            "features_json": "{}",
+            "webhook_url": "https://example.test/webhook",
+            # rotate_secret intentionally omitted
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    # Server flagged secret_changed -> redirect with ?webhook_lid so the
+    # modal auto-opens with the secret revealed.
+    assert "webhook_lid=" in r.headers["location"], r.headers["location"]
+
+    post = _read_license(lid)
+    assert post.webhook_url == "https://example.test/webhook"
+    assert post.webhook_secret is not None
+    assert post.webhook_secret.startswith("whsec_")
+
+
+def test_form_webhook_handler_no_mint_when_url_unchanged_and_no_rotate(
+    client: TestClient, monkeypatch
+) -> None:
+    """Re-saving the same URL without ticking Rotate must NOT change the
+    secret -- otherwise every Update click would invalidate the receiver's
+    persisted secret. (Form path uses mint_on_url_change=True, but the
+    URL didn't change, so no mint.)"""
+    _create_product(client)
+    lid = _issue_via_ui(client, webhook_url="https://example.test/webhook")
+    cookies = _admin_login(client)
+    sec1 = _read_license(lid).webhook_secret
+
+    r = client.post(
+        f"/admin/licenses/{lid}/webhook",
+        data={"webhook_url": "https://example.test/webhook"},
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert _read_license(lid).webhook_secret == sec1
+
+
 def test_signature_verifies_with_secret_in_db(client: TestClient, monkeypatch) -> None:
     _create_product(client)
     lid = _issue_via_ui(client, webhook_url="https://example.test/webhook")
