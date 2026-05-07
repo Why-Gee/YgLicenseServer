@@ -539,7 +539,13 @@ def _set_license_status(db: Session, lic: License, new_status: str, note: str) -
         license_id=lic.id, product_id=lic.product_id,
         type=f"status:{new_status}", note=note,
     ))
-    db.flush()  # ensure status committed in-session before webhook reads it
+    # COMMIT before the webhook fires. Receivers POST back into /v1/check
+    # synchronously while we're still inside deliver_status_change(); a
+    # plain flush() would only persist within this session's transaction
+    # and the new GET-a-fresh-Session /v1/check call would still read the
+    # OLD status -> hand back a 200 + JWT for the just-disabled license,
+    # defeating the whole point of the webhook.
+    db.commit()
     # Best-effort outbound webhook. Fire-and-forget — failures are logged
     # but never raised, so a webhook outage doesn't block admin actions.
     wh.deliver_status_change(license_obj=lic, previous_status=previous)
@@ -552,7 +558,6 @@ def license_revoke(lid: str, request: Request, db: Session = Depends(get_db)) ->
     if lic is None:
         raise HTTPException(status_code=404)
     _set_license_status(db, lic, "revoked", "ui/revoke")
-    db.commit()
     return RedirectResponse(f"/admin/products/{lic.product.slug}", status_code=303)
 
 
@@ -565,7 +570,6 @@ def license_disable(lid: str, request: Request, db: Session = Depends(get_db)) -
     if lic is None:
         raise HTTPException(status_code=404)
     _set_license_status(db, lic, "disabled", "ui/disable")
-    db.commit()
     return RedirectResponse(f"/admin/products/{lic.product.slug}", status_code=303)
 
 
@@ -579,14 +583,13 @@ def license_enable(lid: str, request: Request, db: Session = Depends(get_db)) ->
     if lic is None:
         raise HTTPException(status_code=404)
     _set_license_status(db, lic, "active", "ui/enable")
-    db.commit()
     return RedirectResponse(f"/admin/products/{lic.product.slug}", status_code=303)
 
 
 def _delete_license(db: Session, lic: License) -> None:
     # Snapshot fields BEFORE delete so we can fire the webhook with them
     # afterwards (the License row is gone and lic.product / lic.customer
-    # become unreachable post-flush).
+    # become unreachable post-commit).
     webhook_url = lic.webhook_url
     webhook_secret = lic.webhook_secret
     snapshot = {
@@ -605,6 +608,11 @@ def _delete_license(db: Session, lic: License) -> None:
     db.query(Event).filter_by(license_id=lic.id).update({"license_id": None})
     db.query(Install).filter_by(license_id=lic.id).delete()
     db.delete(lic)
+    # COMMIT before firing the webhook -- same race as _set_license_status:
+    # the receiver POSTs back into /v1/check synchronously and must see the
+    # license is gone (-> 401 invalid_key), not still present in another
+    # session's snapshot.
+    db.commit()
     # Best-effort outbound webhook for the deletion event.
     if webhook_url and webhook_secret:
         wh.deliver_deleted(webhook_url=webhook_url, webhook_secret=webhook_secret, **snapshot)
@@ -620,7 +628,6 @@ def license_delete_one(lid: str, request: Request, db: Session = Depends(get_db)
         raise HTTPException(status_code=404)
     slug = lic.product.slug
     _delete_license(db, lic)
-    db.commit()
     return RedirectResponse(f"/admin/products/{slug}?deleted=1", status_code=303)
 
 
@@ -644,9 +651,12 @@ def licenses_bulk_delete(
         lic = db.query(License).filter_by(id=lid, product_id=p.id).one_or_none()
         if lic is None:
             continue
+        # _delete_license commits per-license now (so the webhook receiver
+        # sees the deletion). Bulk semantics become "best effort, each is
+        # independent" -- which is fine for a delete: one failed receiver
+        # doesn't block the others.
         _delete_license(db, lic)
         deleted += 1
-    db.commit()
     return RedirectResponse(
         f"/admin/products/{slug}?deleted={deleted}", status_code=303
     )
