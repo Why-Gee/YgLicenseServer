@@ -177,6 +177,21 @@ def _delete_product(db: Session, p: Product) -> int:
     return license_count
 
 
+@router.post("/admin/products/{slug}/delete")
+def product_delete_one(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    """Single-row delete (trash-icon path)."""
+    _require_login(request)
+    p = db.query(Product).filter_by(slug=slug).one_or_none()
+    if p is None:
+        raise HTTPException(status_code=404)
+    license_count = _delete_product(db, p)
+    db.commit()
+    return RedirectResponse(
+        f"/admin?deleted_products=1&deleted_licenses={license_count}",
+        status_code=303,
+    )
+
+
 @router.post("/admin/products/delete")
 def products_bulk_delete(
     request: Request,
@@ -432,6 +447,20 @@ def _delete_license(db: Session, lic: License) -> None:
     # Best-effort outbound webhook for the deletion event.
     if webhook_url and webhook_secret:
         wh.deliver_deleted(webhook_url=webhook_url, webhook_secret=webhook_secret, **snapshot)
+
+
+@router.post("/admin/licenses/{lid}/delete")
+def license_delete_one(lid: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    """Single-row delete (trash-icon path). Bulk delete on the form-level
+    submit button still works for multi-select."""
+    _require_login(request)
+    lic = db.query(License).filter_by(id=lid).one_or_none()
+    if lic is None:
+        raise HTTPException(status_code=404)
+    slug = lic.product.slug
+    _delete_license(db, lic)
+    db.commit()
+    return RedirectResponse(f"/admin/products/{slug}?deleted=1", status_code=303)
 
 
 @router.post("/admin/products/{slug}/licenses/delete")

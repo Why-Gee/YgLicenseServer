@@ -43,6 +43,7 @@
       <thead><tr>
         <th style="width:1%;"><input type="checkbox" data-select-all title="Select All"></th>
         <th>Slug</th><th>Name</th><th>Prefix</th><th>Licenses</th><th>Created</th>
+        <th style="width:1%;"></th>
       </tr></thead>
       <tbody>
       {% for p in products %}
@@ -53,6 +54,20 @@
           <td><code>{{ p.key_prefix }}_</code></td>
           <td>{{ p.licenses | length }}</td>
           <td class="muted">{{ p.created_at.strftime('%Y-%m-%d') }}</td>
+          <td>
+            <button type="submit" class="btn-icon"
+                    formaction="/admin/products/{{ p.slug }}/delete"
+                    formnovalidate
+                    title="Delete this product"
+                    aria-label="Delete this product"
+                    data-confirm-title="Delete this product?"
+                    data-confirm-body="Permanently removes the product and ALL licenses + installs under it. The Ed25519 keypair is destroyed forever — clients with the old pubkey baked in will reject any future license you issue under a re-created product of the same slug. Cannot be undone."
+                    data-confirm-label="Delete">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M6.5 1h3a.5.5 0 0 1 .5.5v1H6v-1a.5.5 0 0 1 .5-.5zM11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3A1.5 1.5 0 0 0 5 1.5v1H1.5a.5.5 0 0 0 0 1h.538l.853 10.66A2 2 0 0 0 4.885 16h6.23a2 2 0 0 0 1.994-1.84l.853-10.66h.538a.5.5 0 0 0 0-1H11zM4.5 5.5a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 0a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3.5.5a.5.5 0 0 0-1 0v8a.5.5 0 0 0 1 0V6z"/>
+              </svg>
+            </button>
+          </td>
         </tr>
       {% endfor %}
       </tbody>

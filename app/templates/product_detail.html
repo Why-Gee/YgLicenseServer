@@ -98,27 +98,29 @@
           <td><span class="badge {{ lic.status }}">{{ lic.status }}</span></td>
           <td class="muted">{{ lic.valid_until.strftime('%Y-%m-%d') }}</td>
           <td style="white-space:nowrap;">
-            {% if lic.status == 'active' %}
-            <button type="submit" class="btn muted"
-                    formaction="/admin/licenses/{{ lic.id }}/disable"
+            {# Toggle: ON = status active. Click flips to /disable or /enable. #}
+            {% set is_on = lic.status == 'active' %}
+            <button type="submit"
+                    class="toggle-switch {{ 'on' if is_on else 'off' }}"
+                    formaction="/admin/licenses/{{ lic.id }}/{{ 'disable' if is_on else 'enable' }}"
                     formnovalidate
-                    data-confirm-title="Disable this license?"
-                    data-confirm-body="Sets status=disabled. Clients will fail validation after the {{ lic.product.slug }} grace period (default 7 days). You can re-enable it later from this page — no need to reissue a key."
-                    data-confirm-label="Disable">Disable</button>
-            <button type="submit" class="btn danger"
-                    formaction="/admin/licenses/{{ lic.id }}/revoke"
+                    aria-pressed="{{ 'true' if is_on else 'false' }}"
+                    aria-label="Toggle license enabled state"
+                    title="{{ 'Click to disable' if is_on else 'Click to enable' }}"></button>
+            <span class="toggle-label">Enable</span>
+            {# Trash icon: single-license delete via dedicated endpoint #}
+            <button type="submit" class="btn-icon"
+                    formaction="/admin/licenses/{{ lic.id }}/delete"
                     formnovalidate
-                    data-confirm-title="Revoke this license?"
-                    data-confirm-body="Sets status=revoked. Clients will fail validation after the grace period. Intended to be permanent — but you can also Enable a revoked license later if needed (treat that as an admin override)."
-                    data-confirm-label="Revoke">Revoke</button>
-            {% elif lic.status == 'disabled' or lic.status == 'revoked' %}
-            <button type="submit" class="btn"
-                    formaction="/admin/licenses/{{ lic.id }}/enable"
-                    formnovalidate
-                    data-confirm-title="Enable this license?"
-                    data-confirm-body="Sets status=active. Clients pick this up on the next /v1/check (every 24h via Celery beat, or immediately on backend restart)."
-                    data-confirm-label="Enable">Enable</button>
-            {% endif %}
+                    title="Delete this license"
+                    aria-label="Delete this license"
+                    data-confirm-title="Delete this license?"
+                    data-confirm-body="Permanently removes this license row. Installs are removed; events are kept with license_id nulled. Cannot be undone."
+                    data-confirm-label="Delete">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M6.5 1h3a.5.5 0 0 1 .5.5v1H6v-1a.5.5 0 0 1 .5-.5zM11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3A1.5 1.5 0 0 0 5 1.5v1H1.5a.5.5 0 0 0 0 1h.538l.853 10.66A2 2 0 0 0 4.885 16h6.23a2 2 0 0 0 1.994-1.84l.853-10.66h.538a.5.5 0 0 0 0-1H11zM4.5 5.5a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 0a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3.5.5a.5.5 0 0 0-1 0v8a.5.5 0 0 0 1 0V6z"/>
+              </svg>
+            </button>
           </td>
         </tr>
         <tr style="background:rgba(255,255,255,.02);">

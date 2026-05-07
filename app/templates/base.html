@@ -46,6 +46,19 @@
     .modal-card p { margin:.5em 0; color:var(--fg); }
     .modal-card .step { color:var(--muted); font-size:.8em; text-transform:uppercase; letter-spacing:.05em; margin-bottom:.3em; }
     .modal-actions { display:flex; gap:.6em; justify-content:flex-end; margin-top:1.2em; }
+    /* iOS-style toggle: square switch with sliding knob. Use as a <button> so
+       it submits a form (formaction picks /enable or /disable based on state). */
+    .toggle-switch { position:relative; width:38px; height:22px; padding:0; border:0; border-radius:11px; background:#3a3f47; cursor:pointer; vertical-align:middle; transition:background .15s; }
+    .toggle-switch.on { background:var(--ok); }
+    .toggle-switch::before { content:''; position:absolute; top:2px; left:2px; width:18px; height:18px; background:#fff; border-radius:50%; transition:transform .15s; }
+    .toggle-switch.on::before { transform:translateX(16px); }
+    .toggle-switch:hover { filter:brightness(1.1); }
+    .toggle-label { color:var(--muted); font-size:.85em; margin-left:.4em; vertical-align:middle; }
+    /* Icon-only button: square, transparent, hover-glow. Use for trash and
+       similar single-action row controls. */
+    .btn-icon { background:transparent; border:1px solid transparent; padding:.3em; border-radius:4px; color:var(--muted); cursor:pointer; line-height:0; }
+    .btn-icon:hover { color:var(--danger); border-color:var(--bd); background:var(--card); }
+    .btn-icon svg { display:block; }
   </style>
 </head>
 <body>
