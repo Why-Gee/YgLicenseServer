@@ -471,3 +471,85 @@ def test_signature_verifies_with_secret_in_db(client: TestClient, monkeypatch) -
         hashlib.sha256,
     ).hexdigest()
     assert hmac.compare_digest(expected, parts["v1"])
+
+
+# ---------- regression: flash banners must render inside the modal --------
+#
+# UX bug (PR #18): redirects with ?webhook_lid= / ?webhook_test_lid= /
+# ?issued= / ?edited= auto-open the license modal, but the matching banner
+# was only rendered on the background page where the overlay covered it.
+# Pin that the banner text now appears INSIDE the #license-modal div so
+# the admin sees it without dismissing the dialog.
+
+def _assert_in_modal(html: bytes, needle: bytes) -> None:
+    modal_open = html.find(b'<div id="license-modal"')
+    assert modal_open != -1, "license modal not rendered"
+    assert html.find(needle, modal_open) != -1, (
+        f"banner {needle!r} not found inside #license-modal"
+    )
+
+
+def test_webhook_update_banner_renders_inside_modal(client: TestClient) -> None:
+    _create_product(client)
+    lid = _issue_via_ui(client)
+    cookies = _admin_login(client)
+
+    r = client.post(
+        f"/admin/licenses/{lid}/webhook",
+        data={"webhook_url": "https://example.test/webhook"},
+        cookies=cookies, follow_redirects=True,
+    )
+    assert r.status_code == 200
+    _assert_in_modal(r.content, b"webhook configuration updated")
+
+
+def test_webhook_test_ok_banner_renders_inside_modal(
+    client: TestClient, monkeypatch
+) -> None:
+    _create_product(client)
+    lid = _issue_via_ui(client, webhook_url="https://example.test/webhook")
+    cookies = _admin_login(client)
+
+    with _captured(monkeypatch, status=200):
+        r = client.post(
+            f"/admin/licenses/{lid}/webhook/test",
+            cookies=cookies, follow_redirects=True,
+        )
+    assert r.status_code == 200
+    _assert_in_modal(r.content, b"test webhook delivered (HTTP 200)")
+
+
+def test_webhook_test_failure_banner_renders_inside_modal(
+    client: TestClient, monkeypatch
+) -> None:
+    _create_product(client)
+    lid = _issue_via_ui(client, webhook_url="https://example.test/webhook")
+    cookies = _admin_login(client)
+
+    with _captured(monkeypatch, status=500):
+        r = client.post(
+            f"/admin/licenses/{lid}/webhook/test",
+            cookies=cookies, follow_redirects=True,
+        )
+    assert r.status_code == 200
+    _assert_in_modal(r.content, b"test webhook failed")
+
+
+def test_edited_banner_renders_inside_modal(client: TestClient) -> None:
+    _create_product(client)
+    lid = _issue_via_ui(client)
+    cookies = _admin_login(client)
+    pre = _read_license(lid)
+
+    r = client.post(
+        f"/admin/licenses/{lid}/edit",
+        data={
+            "plan": pre.plan,
+            "max_users": str(pre.max_users),
+            "valid_until": pre.valid_until.strftime("%Y-%m-%d"),
+            "features_json": "{}",
+        },
+        cookies=cookies, follow_redirects=True,
+    )
+    assert r.status_code == 200
+    _assert_in_modal(r.content, b"license updated")
