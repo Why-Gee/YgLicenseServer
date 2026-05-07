@@ -1,5 +1,10 @@
 param(
-    # Version bump kind. Exactly one of these must be set.
+    # Optional version-bump helpers. If set, deploy.ps1 bumps app/__init__.py
+    # + pyproject.toml and commits the bump itself. If NONE are set (default),
+    # deploy.ps1 uses whatever version is already in app/__init__.py and
+    # expects the bump to have been committed already (the normal path -- the
+    # session that wrote the feature code is responsible for the version
+    # bump).
     [switch]$Patch,
     [switch]$Minor,
     [switch]$Major,
@@ -16,15 +21,17 @@ param(
     [switch]$DryRun
 )
 
-# deploy.ps1 -- one-shot release: bump version, commit, tag, push, wait for CI,
-# restart the GCP VM. Replaces the 7-step manual flow.
+# deploy.ps1 -- ship whatever version is in app/__init__.py: tag, push, wait
+# for CI, restart the GCP VM. The session that modified the code owns the
+# version bump (it's part of the feature change).
 #
-#   ./deploy.ps1 -Patch     -- 0.3.0 -> 0.3.1
-#   ./deploy.ps1 -Minor     -- 0.3.0 -> 0.4.0
-#   ./deploy.ps1 -Major     -- 0.3.0 -> 1.0.0
+#   ./deploy.ps1            -- ship the current version (no bump)
+#   ./deploy.ps1 -Patch     -- 0.3.0 -> 0.3.1, commit, ship
+#   ./deploy.ps1 -Minor     -- 0.3.0 -> 0.4.0, commit, ship
+#   ./deploy.ps1 -Major     -- 0.3.0 -> 1.0.0, commit, ship
 #
 # Source of truth for current version: app/__init__.py:__version__.
-# pyproject.toml:version is bumped to match in the same commit.
+# pyproject.toml:version is bumped to match (when bumping).
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
@@ -32,10 +39,11 @@ Set-Location $root
 
 # ── arg validation ───────────────────────────────────────────────────────────
 $bumps = @($Patch, $Minor, $Major) | Where-Object { $_ }
-if ($bumps.Count -ne 1) {
-    Write-Host "Specify exactly one of: -Patch, -Minor, -Major" -ForegroundColor Red
+if ($bumps.Count -gt 1) {
+    Write-Host "Specify at most one of: -Patch, -Minor, -Major" -ForegroundColor Red
     exit 1
 }
+$DoBump = $bumps.Count -eq 1
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 function Run([string]$cmd, [switch]$Capture) {
@@ -78,12 +86,16 @@ function Write-Version([string]$file, [string]$pattern, [string]$replacement) {
 }
 
 # ── pre-flight ───────────────────────────────────────────────────────────────
-$kind = if ($Patch) { 'patch' } elseif ($Minor) { 'minor' } else { 'major' }
 $current = Read-Version
-$next = Bump-Version $current $kind
+if ($DoBump) {
+    $kind = if ($Patch) { 'patch' } elseif ($Minor) { 'minor' } else { 'major' }
+    $next = Bump-Version $current $kind
+    Write-Host "version: $current  ->  $next  ($kind)"
+} else {
+    $next = $current
+    Write-Host "version: $current  (using current; no bump)"
+}
 $tag = "v$next"
-
-Write-Host "version: $current  ->  $next  ($kind)"
 Write-Host "tag:     $tag"
 
 # Working tree clean?
@@ -145,23 +157,26 @@ foreach ($tool in @('git', 'gh', 'gcloud')) {
     }
 }
 
-# ── 1. bump version files ────────────────────────────────────────────────────
-if (-not $DryRun) {
-    Write-Version "app/__init__.py"  '__version__\s*=\s*"[^"]+"'  "__version__ = `"$next`""
-    Write-Version "pyproject.toml"   '(?m)^version\s*=\s*"[^"]+"' "version = `"$next`""
+# ── 1. bump version files (if --Patch/--Minor/--Major given) ────────────────
+if ($DoBump) {
+    if (-not $DryRun) {
+        Write-Version "app/__init__.py"  '__version__\s*=\s*"[^"]+"'  "__version__ = `"$next`""
+        Write-Version "pyproject.toml"   '(?m)^version\s*=\s*"[^"]+"' "version = `"$next`""
+    }
+    Write-Host "[1/6] bumped app/__init__.py + pyproject.toml -> $next"
+    Run "git add app/__init__.py pyproject.toml"
+    Run "git commit -m `"release: $tag`""
+    Write-Host "[2/6] committed"
+} else {
+    Write-Host "[1/6] no bump requested (current version $current); nothing to commit"
+    Write-Host "[2/6] skipped commit"
 }
-Write-Host "[1/6] bumped app/__init__.py + pyproject.toml -> $next"
-
-# ── 2. commit ────────────────────────────────────────────────────────────────
-Run "git add app/__init__.py pyproject.toml"
-Run "git commit -m `"release: $tag`""
-Write-Host "[2/6] committed"
 
 # ── 3. tag + push ────────────────────────────────────────────────────────────
 Run "git tag $tag"
-Run "git push origin main"
+if ($DoBump) { Run "git push origin main" }
 Run "git push origin $tag"
-Write-Host "[3/6] pushed main + $tag to origin"
+Write-Host "[3/6] pushed $tag to origin"
 
 # ── 4. wait for CI ───────────────────────────────────────────────────────────
 if ($SkipCiWait) {
