@@ -177,12 +177,85 @@ screen. It is per-license and per-customer.
 
 After deploying ASM with the receiver:
 
-- In LS admin UI, open the license row → expand the Webhook section.
-- Paste the customer's URL: `https://<their-host>/api/license/webhook`
-- Click Update — LS generates a new signing secret. Copy it into
-  `LICENSE_WEBHOOK_SECRET` in the tenant's env file.
+- In LS admin UI, open the license row → click Edit on the row.
+- Type the customer's URL into the Webhook field:
+  `https://<their-host>/api/license/webhook`
+- Click Update — LS generates a new signing secret + reveals it inside
+  the modal. Copy it into `LICENSE_WEBHOOK_SECRET` in the tenant's env
+  file.
 - Restart the tenant's backend.
-- Click Test in the LS admin UI — should see HTTP 200 in the success banner.
+- Click Test in the modal — should see HTTP 200 in the success banner.
+
+### 4a. Programmatic webhook config (for `start.ps1 -Tunnel`)
+
+When ASM spins up a fresh `cloudflared` quick tunnel on each boot the
+receiver URL changes (`https://<random>.trycloudflare.com/...`). Driving
+the LS admin UI from a script is a lot of clicks; the LS exposes a
+JSON sister of the form handler so `start.ps1` can wire the new URL +
+read back the signing secret in one call.
+
+**Endpoint:** `POST https://yg-license-server.duckdns.org/admin/api/licenses/<license_id>/webhook`
+
+**Auth:** `Authorization: Bearer <ADMIN_TOKEN>` — same env var the LS
+admin UI uses to log in. Mint one in the LS deployment env file
+(`/etc/yg-license-server.env` on the GCP VM, or wherever the systemd
+unit reads from); it doubles as the API token. On the ASM side, store
+it where the script can read it (e.g. `LS_ADMIN_TOKEN` in
+`.env.<tenant-slug>` next to `LICENSE_*` vars).
+
+**Request:**
+
+```bash
+curl -sS -X POST \
+  https://yg-license-server.duckdns.org/admin/api/licenses/$LICENSE_ID/webhook \
+  -H "Authorization: Bearer $LS_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://fool-careful-vacuum.trycloudflare.com/api/license/webhook","rotate":false}'
+```
+
+**Response (200):**
+
+```json
+{
+  "webhook_url": "https://fool-careful-vacuum.trycloudflare.com/api/license/webhook",
+  "webhook_secret": "whsec_..."
+}
+```
+
+**Semantics:**
+
+- `url` is required. Empty string clears both URL and secret.
+- `rotate` defaults to `false`. The LS auto-mints a secret on the
+  **first** call against a license that has none (otherwise it'd
+  return `webhook_secret: null` and your receiver couldn't verify
+  signatures). After that, set `rotate: true` only when you want a
+  fresh secret.
+- The current secret is **always** returned, whether it was just
+  minted or not — `start.ps1` can blindly write
+  `LICENSE_WEBHOOK_SECRET=<webhook_secret>` into the receiver env
+  file every boot and it'll Just Work even when the secret didn't
+  rotate.
+
+**Errors:**
+
+| HTTP | Reason |
+|---|---|
+| 401 | Missing or wrong `Authorization` header |
+| 404 | Unknown `license_id` |
+| 422 | Body missing `url` field, or wrong types |
+| 503 | `ADMIN_TOKEN` env var not set on the LS deployment |
+
+`start.ps1` sketch (PowerShell):
+
+```powershell
+$body = @{ url = $tunnelUrl; rotate = $false } | ConvertTo-Json
+$r = Invoke-RestMethod -Method POST `
+    -Uri "$LsUrl/admin/api/licenses/$LicenseId/webhook" `
+    -Headers @{ Authorization = "Bearer $LsAdminToken" } `
+    -ContentType 'application/json' `
+    -Body $body
+# $r.webhook_secret -> persist into the tenant's env file
+```
 
 ---
 
