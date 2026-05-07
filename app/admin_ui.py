@@ -11,10 +11,11 @@ import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from itsdangerous import BadSignature, URLSafeSerializer
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app import __version__
@@ -385,6 +386,36 @@ def license_edit(
     )
 
 
+def _apply_webhook_config(
+    lic: License, *, url: str | None, rotate: bool, mint_on_url_change: bool
+) -> None:
+    """Mutate `lic.webhook_url` + `lic.webhook_secret` per the rotate semantics.
+
+    Always mints a fresh secret when:
+      - `rotate=True` (caller explicitly asked), OR
+      - the license has no secret yet (first-time set), OR
+      - `mint_on_url_change=True` and the URL actually changed.
+
+    `mint_on_url_change=True` matches the UI handler's existing behavior:
+    clicking Update with a new URL implicitly rotates the secret. The JSON
+    API uses `mint_on_url_change=False` so callers control rotation.
+
+    `url=None` clears both fields. Caller commits the session.
+    """
+    if url:
+        should_mint = (
+            rotate
+            or not lic.webhook_secret
+            or (mint_on_url_change and lic.webhook_url != url)
+        )
+        if should_mint:
+            lic.webhook_secret = wh.generate_secret()
+        lic.webhook_url = url
+    else:
+        lic.webhook_url = None
+        lic.webhook_secret = None
+
+
 @router.post("/admin/licenses/{lid}/webhook")
 def license_webhook_update(
     lid: str,
@@ -401,13 +432,9 @@ def license_webhook_update(
     if lic is None:
         raise HTTPException(status_code=404)
     new_url = webhook_url.strip() or None
-    if new_url:
-        if lic.webhook_url != new_url or rotate_secret == "1" or not lic.webhook_secret:
-            lic.webhook_secret = wh.generate_secret()
-        lic.webhook_url = new_url
-    else:
-        lic.webhook_url = None
-        lic.webhook_secret = None
+    _apply_webhook_config(
+        lic, url=new_url, rotate=rotate_secret == "1", mint_on_url_change=True
+    )
     db.add(Event(
         license_id=lic.id, product_id=lic.product_id, type="webhook:updated",
         payload={"set": bool(new_url)}, note="ui/webhook",
@@ -415,6 +442,63 @@ def license_webhook_update(
     db.commit()
     return RedirectResponse(
         f"/admin/products/{lic.product.slug}?webhook_lid={lic.id}", status_code=303
+    )
+
+
+# ----- programmatic admin API (Bearer ADMIN_TOKEN) -----------------------
+# Bearer-token sister of the form-driven /admin/licenses/{lid}/webhook
+# above. Lets external scripts (e.g. ASM's start.ps1 spinning up a fresh
+# cloudflared quick tunnel on each boot) wire the receiver URL + read back
+# the signing secret without driving the admin UI.
+
+class _WebhookConfigIn(BaseModel):
+    url: str  # required; empty string clears (delete url + secret)
+    rotate: bool = False
+
+
+class _WebhookConfigOut(BaseModel):
+    webhook_url: str | None
+    webhook_secret: str | None
+
+
+def _require_admin_bearer(authorization: str | None) -> None:
+    s = get_settings()
+    if not s.admin_token:
+        raise HTTPException(status_code=503, detail="admin disabled (ADMIN_TOKEN unset)")
+    if authorization != f"Bearer {s.admin_token}":
+        raise HTTPException(status_code=401, detail="invalid admin token")
+
+
+@router.post(
+    "/admin/api/licenses/{license_id}/webhook",
+    response_model=_WebhookConfigOut,
+)
+def admin_api_webhook_set(
+    license_id: str,
+    body: _WebhookConfigIn,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> _WebhookConfigOut:
+    """Programmatic admin endpoint -- mirrors the UI form handler above but
+    with bearer auth, JSON I/O, and explicit rotate semantics. The current
+    secret is always returned (even when not minted this call) so the
+    caller can populate a fresh receiver env file on every boot."""
+    _require_admin_bearer(authorization)
+    lic = db.query(License).filter_by(id=license_id).one_or_none()
+    if lic is None:
+        raise HTTPException(status_code=404, detail="license not found")
+    new_url = body.url.strip() or None
+    _apply_webhook_config(
+        lic, url=new_url, rotate=body.rotate, mint_on_url_change=False
+    )
+    db.add(Event(
+        license_id=lic.id, product_id=lic.product_id, type="webhook:updated",
+        payload={"set": bool(new_url), "rotated": body.rotate},
+        note="api/webhook",
+    ))
+    db.commit()
+    return _WebhookConfigOut(
+        webhook_url=lic.webhook_url, webhook_secret=lic.webhook_secret
     )
 
 
