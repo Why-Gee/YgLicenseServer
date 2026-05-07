@@ -161,6 +161,25 @@
 {# Reusable license modal — issue + edit + webhook config in one form. #}
 <div id="license-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="lm-title">
   <div class="modal-card" style="max-width:640px;">
+    {# In-modal flashes — the same redirects that auto-open this modal would
+       otherwise drop the banner on the background page hidden under the
+       overlay. Render here too so the admin sees the result inside the dialog. #}
+    {% if request.query_params.get('issued') %}
+    <div class="success" style="margin-top:0;">license issued. copy the key from the table — we don't show it again in plain text. if a webhook URL was set, the signing secret is shown below.</div>
+    {% endif %}
+    {% if request.query_params.get('edited') %}
+    <div class="success" style="margin-top:0;">license updated.</div>
+    {% endif %}
+    {% if request.query_params.get('webhook_lid') %}
+    <div class="success" style="margin-top:0;">webhook configuration updated. if you set/rotated the URL or secret, the new signing secret is shown below — copy it now.</div>
+    {% endif %}
+    {% if request.query_params.get('webhook_test_lid') %}
+    {% if request.query_params.get('webhook_test_ok') == '1' %}
+    <div class="success" style="margin-top:0;">test webhook delivered (HTTP {{ request.query_params.get('webhook_test_status') }}).</div>
+    {% else %}
+    <div class="error" style="margin-top:0;">test webhook failed (HTTP {{ request.query_params.get('webhook_test_status') or 'no response' }}). check the receiver and the engine log for details.</div>
+    {% endif %}
+    {% endif %}
     <h3 id="lm-title" style="margin-top:0;">Issue License</h3>
     <form id="lm-form" method="post" style="display:grid;grid-template-columns:1fr 1fr;gap:.5em 1em;">
       <div id="lm-key-row" style="display:none;grid-column:1/-1;">
