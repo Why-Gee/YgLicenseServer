@@ -232,7 +232,10 @@
       </div>
       <div class="modal-actions" style="grid-column:1/-1;">
         <button type="button" class="btn muted" id="lm-cancel">Cancel</button>
-        <button type="submit" id="lm-submit" class="btn">Issue License</button>
+        <button type="submit" id="lm-apply" class="btn muted" style="display:none;"
+                title="Save changes and stay in this modal so you can keep editing.">Apply</button>
+        <button type="submit" id="lm-submit" class="btn"
+                title="Save changes and close the modal.">Save</button>
       </div>
     </form>
   </div>
@@ -282,9 +285,28 @@
   var updateBtn = document.getElementById('lm-update-btn');
   var testBtn = document.getElementById('lm-test-btn');
   var updateHint = document.getElementById('lm-update-hint');
+  var applyBtn = document.getElementById('lm-apply');
   var submitBtn = document.getElementById('lm-submit');
   var cancelBtn = document.getElementById('lm-cancel');
   var closeBtn = document.getElementById('lm-close');
+
+  // Save button = save + close. Apply = save + keep open. The auto-open
+  // logic below honors a one-shot sessionStorage flag set by Save so the
+  // post-redirect render skips re-opening the modal.
+  var CLOSE_FLAG = 'lm-close-after-save';
+  if (applyBtn) applyBtn.addEventListener('click', function () {
+    sessionStorage.removeItem(CLOSE_FLAG);
+  });
+  // Submit (Save) sets the flag in edit mode only -- Issue mode submits
+  // also use this button (relabeled), and there we WANT the modal to
+  // reopen so the just-revealed signing secret is visible.
+  submitBtn.addEventListener('click', function () {
+    if (submitBtn.dataset.closeAfter === '1') {
+      sessionStorage.setItem(CLOSE_FLAG, '1');
+    } else {
+      sessionStorage.removeItem(CLOSE_FLAG);
+    }
+  });
 
   // Snapshot of form values right after open(). Compared on dismiss to
   // detect unsaved changes. Captures the same fields the form submits.
@@ -354,7 +376,11 @@
     if (v === 'cancel') return;
     if (v === 'discard') { close(); return; }
     if (v === 'save') {
-      if (form.reportValidity()) form.submit();
+      if (form.reportValidity()) {
+        // User invoked dismiss + chose Save -- they want to close.
+        sessionStorage.setItem(CLOSE_FLAG, '1');
+        form.submit();
+      }
     }
   }
 
@@ -365,7 +391,9 @@
   function open(mode, lic) {
     if (mode === 'edit') {
       titleEl.textContent = 'Edit License';
-      submitBtn.textContent = 'Save Changes';
+      submitBtn.textContent = 'Save';
+      submitBtn.dataset.closeAfter = '1';
+      applyBtn.style.display = '';
       form.action = '/admin/licenses/' + lic.id + '/edit';
       // Email is not editable post-issue (joined to customers table). Show
       // it read-only as part of the key block. Strip name + required from
@@ -411,6 +439,8 @@
     } else {
       titleEl.textContent = 'Issue License';
       submitBtn.textContent = 'Issue License';
+      submitBtn.dataset.closeAfter = '';
+      applyBtn.style.display = 'none';
       form.action = '/admin/products/' + slug + '/licenses';
       emailRow.style.display = '';
       emailIn.setAttribute('name', 'email');
@@ -460,8 +490,12 @@
 
   // Auto-open after a redirect that targets a specific license (issued /
   // edited / webhook updated / test sent) so the admin sees the result
-  // (incl. just-revealed secret) without a second click.
-  if (data.auto_open_lid && byId[data.auto_open_lid]) {
+  // (incl. just-revealed secret) without a second click. Save button sets
+  // a one-shot sessionStorage flag to suppress the reopen so Save closes
+  // the modal as advertised.
+  var closeAfter = sessionStorage.getItem(CLOSE_FLAG);
+  sessionStorage.removeItem(CLOSE_FLAG);
+  if (closeAfter !== '1' && data.auto_open_lid && byId[data.auto_open_lid]) {
     open('edit', byId[data.auto_open_lid]);
   }
 })();
