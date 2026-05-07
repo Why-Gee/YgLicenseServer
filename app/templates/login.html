@@ -2,7 +2,7 @@
 {% block title %}Log In{% endblock %}
 {% block content %}
 <div style="max-width:380px;margin:6em auto;">
-  <h2>YgLicenseServer</h2>
+  <h2>YgLicenseServer{% if app_version %} <span class="muted" style="font-size:.55em;font-family:Menlo,Consolas,monospace;font-weight:400;">v{{ app_version }}</span>{% endif %}</h2>
   {% if error %}<div class="error">invalid token</div>{% endif %}
   <form method="post" action="/admin/login" class="card">
     <label for="token">Admin Token</label>
