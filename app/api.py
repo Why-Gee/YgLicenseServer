@@ -222,6 +222,7 @@ def admin_get_product(slug: str, db: Session = Depends(get_db)) -> dict:
 
 class IssueIn(BaseModel):
     email: str
+    name: str | None = None
     plan: str = "standard"
     max_users: int = 10
     features: dict = {}
@@ -250,10 +251,17 @@ def admin_issue(slug: str, body: IssueIn, db: Session = Depends(get_db)) -> Issu
         if body.stripe_customer_id is None
         else db.query(Customer).filter_by(stripe_customer_id=body.stripe_customer_id).one_or_none()
     )
+    name_clean = (body.name or "").strip() or None
     if cust is None:
-        cust = Customer(email=body.email, stripe_customer_id=body.stripe_customer_id)
+        cust = Customer(
+            email=body.email,
+            name=name_clean,
+            stripe_customer_id=body.stripe_customer_id,
+        )
         db.add(cust)
         db.flush()
+    elif name_clean and cust.name != name_clean:
+        cust.name = name_clean
     key = f"{p.key_prefix}_" + secrets.token_urlsafe(32)
     lic = License(
         product_id=p.id,
@@ -298,6 +306,7 @@ def admin_list_licenses(slug: str, limit: int = 200, db: Session = Depends(get_d
             "features": r.features,
             "valid_until": r.valid_until.isoformat(),
             "customer": r.customer.email,
+            "customer_name": r.customer.name,
             "created_at": r.created_at.isoformat(),
         }
         for r in rows
@@ -324,6 +333,7 @@ def admin_customers(db: Session = Depends(get_db)) -> list[dict]:
         {
             "id": c.id,
             "email": c.email,
+            "name": c.name,
             "stripe_customer_id": c.stripe_customer_id,
             "license_count": len(c.licenses),
             "created_at": c.created_at.isoformat(),

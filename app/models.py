@@ -62,6 +62,9 @@ class Customer(Base):
         String(64), unique=True, nullable=True, index=True
     )
     email: Mapped[str] = mapped_column(String(320), index=True)
+    # Optional display name. Populated from the issue/edit form; falls back
+    # to email in the UI when blank.
+    name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     licenses: Mapped[list[License]] = relationship(back_populates="customer")
