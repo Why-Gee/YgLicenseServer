@@ -261,6 +261,7 @@ def license_issue(
     slug: str,
     request: Request,
     email: str = Form(...),
+    customer_name: str = Form(""),
     plan: str = Form("standard"),
     max_users: int = Form(10),
     valid_days: int = Form(365),
@@ -282,11 +283,17 @@ def license_issue(
             f"/admin/products/{slug}?error=invalid+features+json", status_code=303
         )
 
+    name_clean = customer_name.strip() or None
     cust = db.query(Customer).filter_by(email=email).one_or_none()
     if cust is None:
-        cust = Customer(email=email)
+        cust = Customer(email=email, name=name_clean)
         db.add(cust)
         db.flush()
+    elif name_clean and cust.name != name_clean:
+        # Existing customer: overwrite name when admin supplied a non-empty
+        # value. Empty submission leaves the prior name alone (don't wipe by
+        # accident from the issue form).
+        cust.name = name_clean
     key = f"{p.key_prefix}_" + secrets.token_urlsafe(32)
     webhook_url_clean = webhook_url.strip() or None
     webhook_secret_value = wh.generate_secret() if webhook_url_clean else None
@@ -350,6 +357,7 @@ def license_edit(
     plan: str = Form(...),
     max_users: int = Form(...),
     valid_until: str = Form(...),
+    customer_name: str = Form(""),
     features_json: str = Form("{}"),
     webhook_url: str = Form(""),
     rotate_secret: str = Form(""),
@@ -389,6 +397,9 @@ def license_edit(
     lic.max_users = max_users
     lic.valid_until = new_valid_until
     lic.features = features
+    # Customer name is editable from this modal -- empty value clears it,
+    # non-empty overwrites. Email + key remain immutable.
+    lic.customer.name = customer_name.strip() or None
     new_url = webhook_url.strip() or None
     # Single source of truth -- same helper the dedicated /webhook handler
     # and the JSON API path call. mint_on_url_change=True preserves the

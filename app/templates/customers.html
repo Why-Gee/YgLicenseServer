@@ -5,10 +5,11 @@
 <div class="card">
   {% if customers %}
   <table>
-    <thead><tr><th>Email</th><th>Stripe ID</th><th>Licenses</th><th>Created</th></tr></thead>
+    <thead><tr><th>Name</th><th>Email</th><th>Stripe ID</th><th>Licenses</th><th>Created</th></tr></thead>
     <tbody>
     {% for c in customers %}
       <tr>
+        <td>{% if c.name %}{{ c.name }}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td>{{ c.email }}</td>
         <td class="muted"><code>{{ c.stripe_customer_id or '—' }}</code></td>
         <td>{{ c.licenses | length }}</td>
