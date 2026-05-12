@@ -45,6 +45,7 @@ log = logging.getLogger("license-server.webhooks")
 
 EVENT_STATUS_CHANGED = "license.status.changed"
 EVENT_DELETED = "license.deleted"
+EVENT_UPDATED = "license.updated"
 
 
 def generate_secret() -> str:
@@ -126,6 +127,29 @@ def deliver_status_change(
     return deliver(
         url=license_obj.webhook_url, secret=license_obj.webhook_secret,
         event_type=EVENT_STATUS_CHANGED, data=data,
+    )
+
+
+def deliver_update(
+    *, license_obj: Any, changed_fields: list[str],
+) -> tuple[bool, int | None, str | None] | None:
+    """Fire when admin edits a license without changing its status — features,
+    plan, max_users, valid_until, etc. Receivers invalidate their cached JWT
+    so the next call surfaces the new values. Returns None when no webhook is
+    configured for this license."""
+    if not license_obj.webhook_url or not license_obj.webhook_secret:
+        return None
+    data = {
+        "license_id": license_obj.id,
+        "key": license_obj.key,
+        "product_slug": license_obj.product.slug if license_obj.product else None,
+        "customer_email": license_obj.customer.email if license_obj.customer else None,
+        "status": license_obj.status,
+        "changed_fields": changed_fields,
+    }
+    return deliver(
+        url=license_obj.webhook_url, secret=license_obj.webhook_secret,
+        event_type=EVENT_UPDATED, data=data,
     )
 
 
