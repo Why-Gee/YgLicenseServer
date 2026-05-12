@@ -26,9 +26,12 @@ param(
 # version bump (it's part of the feature change).
 #
 #   ./deploy.ps1            -- ship the current version (no bump)
-#   ./deploy.ps1 -Patch     -- 0.3.0 -> 0.3.1, commit, ship
-#   ./deploy.ps1 -Minor     -- 0.3.0 -> 0.4.0, commit, ship
-#   ./deploy.ps1 -Major     -- 0.3.0 -> 1.0.0, commit, ship
+#   ./deploy.ps1 -Patch     -- 0.3.0 -> 0.3.1, PR + squash-merge, ship
+#   ./deploy.ps1 -Minor     -- 0.3.0 -> 0.4.0, PR + squash-merge, ship
+#   ./deploy.ps1 -Major     -- 0.3.0 -> 1.0.0, PR + squash-merge, ship
+#
+# Branch-protected main: bumps go through a yg/release-vX.Y.Z PR which we
+# create + squash-merge via gh, then tag the resulting main HEAD.
 #
 # Source of truth for current version: app/__init__.py:__version__.
 # pyproject.toml:version is bumped to match (when bumping).
@@ -158,15 +161,30 @@ foreach ($tool in @('git', 'gh', 'gcloud')) {
 }
 
 # ── 1. bump version files (if --Patch/--Minor/--Major given) ────────────────
+# Branch-protected main: bump goes through a PR (yg/release-vX.Y.Z) merged
+# via `gh pr merge --squash`, then we sync main locally before tagging.
+$branch_release = "yg/release-$tag"
 if ($DoBump) {
     if (-not $DryRun) {
         Write-Version "app/__init__.py"  '__version__\s*=\s*"[^"]+"'  "__version__ = `"$next`""
         Write-Version "pyproject.toml"   '(?m)^version\s*=\s*"[^"]+"' "version = `"$next`""
     }
     Write-Host "[1/6] bumped app/__init__.py + pyproject.toml -> $next"
+    Run "git checkout -b $branch_release"
     Run "git add app/__init__.py pyproject.toml"
     Run "git commit -m `"release: $tag`""
-    Write-Host "[2/6] committed"
+    Run "git push -u origin $branch_release"
+    if (-not $DryRun) {
+        & gh pr create --title "release: $tag" --body "Version bump $current -> $next." | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "gh pr create failed (exit $LASTEXITCODE)" }
+        & gh pr merge $branch_release --squash --delete-branch
+        if ($LASTEXITCODE -ne 0) { throw "gh pr merge failed (exit $LASTEXITCODE) -- merge required checks not green yet? rerun with --SkipCiWait off after CI passes" }
+    } else {
+        Write-Host "[dry-run] gh pr create + gh pr merge --squash --delete-branch" -ForegroundColor Yellow
+    }
+    Run "git checkout main"
+    Run "git pull --ff-only origin main"
+    Write-Host "[2/6] PR merged + main synced"
 } else {
     Write-Host "[1/6] no bump requested (current version $current); nothing to commit"
     Write-Host "[2/6] skipped commit"
@@ -174,7 +192,6 @@ if ($DoBump) {
 
 # ── 3. tag + push ────────────────────────────────────────────────────────────
 Run "git tag $tag"
-if ($DoBump) { Run "git push origin main" }
 Run "git push origin $tag"
 Write-Host "[3/6] pushed $tag to origin"
 
