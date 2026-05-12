@@ -39,10 +39,14 @@
       </button>
       <span class="muted" style="margin-left:.5em;">irreversible: kills the keypair, all licenses, all installs.</span>
     </p>
-    <table>
+    <table data-sortable>
       <thead><tr>
         <th style="width:1%;"><input type="checkbox" data-select-all title="Select All"></th>
-        <th>Slug</th><th>Name</th><th>Prefix</th><th>Licenses</th><th>Created</th>
+        <th data-sort-key="slug">Slug</th>
+        <th data-sort-key="name">Name</th>
+        <th data-sort-key="prefix">Prefix</th>
+        <th data-sort-key="licenses" data-sort-type="number">Licenses</th>
+        <th data-sort-key="created" data-sort-type="date">Created</th>
         <th style="width:1%;"></th>
       </tr></thead>
       <tbody>
