@@ -59,6 +59,14 @@
     .btn-icon { background:transparent; border:1px solid transparent; padding:.3em; border-radius:4px; color:var(--muted); cursor:pointer; line-height:0; }
     .btn-icon:hover { color:var(--danger); border-color:var(--bd); background:var(--card); }
     .btn-icon svg { display:block; }
+    /* Click-to-sort table headers. Opt in with <table data-sortable> and mark
+       sortable columns with <th data-sort-key="..."> (optional data-sort-type
+       = "text" | "number" | "date"). Active column shows an arrow. */
+    th[data-sort-key] { cursor:pointer; user-select:none; }
+    th[data-sort-key]:hover { color:var(--fg); }
+    th[data-sort-key]::after { content:""; display:inline-block; width:0; }
+    th[aria-sort="ascending"]::after  { content:" \25B2"; color:var(--accent); font-size:.8em; }
+    th[aria-sort="descending"]::after { content:" \25BC"; color:var(--accent); font-size:.8em; }
   </style>
 </head>
 <body>
@@ -177,6 +185,53 @@
         setTimeout(function () { btn.innerHTML = orig; btn.disabled = false; }, 1500);
       });
     });
+
+    // Click-to-sort tables. Opt in with <table data-sortable>; mark sortable
+    // headers with <th data-sort-key="..."> (+ optional data-sort-type=
+    // "text"|"number"|"date"). First click on a column = ascending; clicking
+    // the active column flips direction. Cell value is data-sort-value if
+    // present, else textContent (so badges/spans sort by their text).
+    (function () {
+      function cellValue(row, idx, type) {
+        var cell = row.children[idx];
+        if (!cell) return type === 'number' ? -Infinity : '';
+        var v = cell.getAttribute('data-sort-value');
+        if (v === null) v = cell.textContent;
+        v = (v || '').trim();
+        if (type === 'number') {
+          var n = parseFloat(v);
+          return isNaN(n) ? -Infinity : n;
+        }
+        return v.toLowerCase();
+      }
+      function sortRows(table, th, dir) {
+        var idx = Array.prototype.indexOf.call(th.parentNode.children, th);
+        var type = th.dataset.sortType || 'text';
+        var tbody = table.tBodies[0];
+        if (!tbody) return;
+        var rows = Array.prototype.slice.call(tbody.rows);
+        var mul = dir === 'ascending' ? 1 : -1;
+        rows.sort(function (a, b) {
+          var va = cellValue(a, idx, type);
+          var vb = cellValue(b, idx, type);
+          if (va < vb) return -1 * mul;
+          if (va > vb) return  1 * mul;
+          return 0;
+        });
+        rows.forEach(function (r) { tbody.appendChild(r); });
+      }
+      document.querySelectorAll('table[data-sortable]').forEach(function (table) {
+        var headers = table.querySelectorAll('thead th[data-sort-key]');
+        headers.forEach(function (th) {
+          th.addEventListener('click', function () {
+            var dir = th.getAttribute('aria-sort') === 'ascending' ? 'descending' : 'ascending';
+            headers.forEach(function (h) { h.removeAttribute('aria-sort'); });
+            th.setAttribute('aria-sort', dir);
+            sortRows(table, th, dir);
+          });
+        });
+      });
+    })();
 
     // Auto-wires any <form class="bulk-form" data-name="..."> so its bulk-delete
     // button is hidden until at least one row is checked. Click runs a two-stage

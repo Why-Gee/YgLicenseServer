@@ -69,22 +69,29 @@
       </button>
       <span class="muted" style="margin-left:.5em;">tick rows then click. installs are removed; events are kept with license_id nulled.</span>
     </p>
-    <table>
+    <table data-sortable>
       <thead><tr>
         <th style="width:1%;"><input type="checkbox" data-select-all title="Select All"></th>
-        <th>Key</th><th>Customer Name</th><th>Customer Email</th><th>Plan</th><th>Status</th><th>Valid Until</th><th>Webhook</th><th></th>
+        <th data-sort-key="key">Key</th>
+        <th data-sort-key="customer_name">Customer Name</th>
+        <th data-sort-key="customer_email">Customer Email</th>
+        <th data-sort-key="plan">Plan</th>
+        <th data-sort-key="status">Status</th>
+        <th data-sort-key="valid_until" data-sort-type="date">Valid Until</th>
+        <th data-sort-key="webhook" data-sort-type="number">Webhook</th>
+        <th></th>
       </tr></thead>
       <tbody>
       {% for lic in licenses %}
         <tr>
           <td><input type="checkbox" name="license_ids" value="{{ lic.id }}"></td>
           <td><code style="font-size:.85em;">{{ lic.key }}</code></td>
-          <td>{% if lic.customer.name %}{{ lic.customer.name }}{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td data-sort-value="{{ (lic.customer.name or '')|lower }}">{% if lic.customer.name %}{{ lic.customer.name }}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td>{{ lic.customer.email }}</td>
           <td>{{ lic.plan }}</td>
           <td><span class="badge {{ lic.status }}">{{ lic.status }}</span></td>
           <td class="muted">{{ lic.valid_until.strftime('%Y-%m-%d') }}</td>
-          <td class="muted" style="font-size:.85em;">
+          <td class="muted" style="font-size:.85em;" data-sort-value="{{ '1' if lic.webhook_url else '0' }}">
             {% if lic.webhook_url %}<span class="badge active">On</span>{% else %}<span class="muted">—</span>{% endif %}
           </td>
           <td style="white-space:nowrap;">
