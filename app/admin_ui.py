@@ -7,9 +7,12 @@ logic as /v1/admin/* — kept in api.py for the JSON consumers.
 """
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
+
+log = logging.getLogger("license-server.admin")
 
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
@@ -393,12 +396,26 @@ def license_edit(
             f"/admin/products/{lic.product.slug}?error=invalid+valid_until",
             status_code=303,
         )
+    # Diff before mutating so we can fire a `license.updated` webhook for any
+    # meaningful change. Status changes have their own event and aren't
+    # reachable from this form (edit modal only edits plan/etc).
+    changed: list[str] = []
+    if lic.plan != plan:
+        changed.append("plan")
+    if lic.max_users != max_users:
+        changed.append("max_users")
+    if lic.valid_until != new_valid_until:
+        changed.append("valid_until")
+    if (lic.features or {}) != features:
+        changed.append("features")
     lic.plan = plan
     lic.max_users = max_users
     lic.valid_until = new_valid_until
     lic.features = features
     # Customer name is editable from this modal -- empty value clears it,
     # non-empty overwrites. Email + key remain immutable.
+    if (lic.customer.name or None) != (customer_name.strip() or None):
+        changed.append("customer_name")
     lic.customer.name = customer_name.strip() or None
     new_url = webhook_url.strip() or None
     # Single source of truth -- same helper the dedicated /webhook handler
@@ -416,6 +433,15 @@ def license_edit(
         note="ui/edit",
     ))
     db.commit()
+    # Push a `license.updated` event so receivers (e.g. ASM) refresh their
+    # cached JWT without waiting for the next phone-home interval. We don't
+    # care about delivery success here -- the receiver's normal poll is the
+    # safety net.
+    if changed:
+        try:
+            wh.deliver_update(license_obj=lic, changed_fields=changed)
+        except Exception as e:  # noqa: BLE001
+            log.warning("post-edit deliver_update failed: %s", e)
     # webhook_lid query param triggers the modal to auto-open with the secret
     # pre revealed when one was set/rotated; otherwise just `edited` so the
     # banner shows but the modal stays closed.
