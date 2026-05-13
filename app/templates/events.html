@@ -3,12 +3,12 @@
 {% block content %}
 <div style="display:flex;align-items:center;justify-content:space-between;gap:1em;flex-wrap:wrap;">
   <h1 style="margin:0;">Events</h1>
-  <a class="btn muted" href="/admin/events.csv" download>
+  <button type="button" class="btn muted" id="events-save-as" title="Download events log as CSV (choose filename + folder)">
     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-2px;margin-right:.3em;" aria-hidden="true">
       <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
       <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708z"/>
-    </svg>Save As CSV
-  </a>
+    </svg>Save As
+  </button>
 </div>
 <div class="card">
   {% if events %}
@@ -34,4 +34,66 @@
   <p class="muted">no events yet.</p>
   {% endif %}
 </div>
+
+<script>
+(function () {
+  // Save As: prefer the File System Access API (Chromium) which actually
+  // pops a Save-As dialog letting the user pick directory + filename. Fall
+  // back to a normal anchor-download for Firefox/Safari -- the user can
+  // still pick a folder if they have "Ask where to save each file" on, but
+  // at minimum gets the suggested filename baked in.
+  var btn = document.getElementById('events-save-as');
+  if (!btn) return;
+  function suggestedName() {
+    var d = new Date();
+    var pad = function (n) { return String(n).padStart(2, '0'); };
+    return (
+      'events-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate())
+      + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds())
+      + '.csv'
+    );
+  }
+  btn.addEventListener('click', async function () {
+    btn.disabled = true;
+    var orig = btn.innerHTML;
+    btn.textContent = 'Preparing…';
+    try {
+      var resp = await fetch('/admin/events.csv', { credentials: 'same-origin' });
+      if (!resp.ok) { alert('Failed to fetch events: HTTP ' + resp.status); return; }
+      var blob = await resp.blob();
+      var name = suggestedName();
+
+      if (window.showSaveFilePicker) {
+        try {
+          var handle = await window.showSaveFilePicker({
+            suggestedName: name,
+            types: [{ description: 'CSV file', accept: { 'text/csv': ['.csv'] } }],
+          });
+          var writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          return;
+        } catch (e) {
+          // User cancelled the picker -> bail silently. Other errors fall
+          // through to the anchor-download fallback.
+          if (e && e.name === 'AbortError') return;
+        }
+      }
+
+      // Fallback: trigger a download with the suggested filename.
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    } finally {
+      btn.innerHTML = orig;
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
 {% endblock %}

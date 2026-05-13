@@ -208,8 +208,14 @@ def test_events_csv_download(client: TestClient) -> None:
 
 
 def test_events_page_has_save_as_button(client: TestClient) -> None:
+    """Save As button is JS-driven (showSaveFilePicker w/ download fallback);
+    it fetches /admin/events.csv and writes via the user's chosen handle.
+    The page no longer carries a raw <a href> to the CSV — pin the button id
+    and label, and the JS reference to the endpoint."""
     cookies = _login(client)
     r = client.get("/admin/events", cookies=cookies)
     assert r.status_code == 200
-    assert b'href="/admin/events.csv"' in r.content
-    assert b"Save As CSV" in r.content
+    assert b'id="events-save-as"' in r.content
+    assert b"Save As" in r.content
+    # JS still calls the same endpoint.
+    assert b"/admin/events.csv" in r.content
