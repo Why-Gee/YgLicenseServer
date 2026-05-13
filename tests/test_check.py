@@ -149,3 +149,95 @@ def test_admin_ui_login_success(client: TestClient) -> None:
     )
     assert r.status_code == 303
     assert "asm_ls_session" in r.headers.get("set-cookie", "")
+
+
+# ---------- per-tenant self-registration via /v1/check -------------------
+#
+# ASM refactor: each tenant phones home with its own license_key and auto-
+# acquires its webhook_secret (and registers its public_url) without any
+# admin-UI step. Pin both: secret auto-mint, and public_url upsert.
+
+def _read_license(key: str):
+    """Fresh License row by key, isolated from any cached session state."""
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        return s.query(License).filter_by(key=key).one()
+
+
+def test_check_returns_webhook_secret(client: TestClient) -> None:
+    _create_product(client)
+    key = _issue(client)
+    r = client.post("/v1/check", json={"key": key, "install_id": "i1", "version": "1.0.0"})
+    assert r.status_code == 200
+    body = r.json()
+    assert "webhook_secret" in body
+    assert body["webhook_secret"].startswith("whsec_")
+
+
+def test_check_mints_webhook_secret_when_absent(client: TestClient) -> None:
+    """First /v1/check on a license without a webhook_secret must mint one
+    and persist it. A second call returns the same value (idempotent)."""
+    _create_product(client)
+    key = _issue(client)
+    assert _read_license(key).webhook_secret is None
+
+    r1 = client.post("/v1/check", json={"key": key, "install_id": "i1", "version": "1.0.0"})
+    s1 = r1.json()["webhook_secret"]
+    assert s1.startswith("whsec_")
+    assert _read_license(key).webhook_secret == s1
+
+    r2 = client.post("/v1/check", json={"key": key, "install_id": "i1", "version": "1.0.0"})
+    assert r2.json()["webhook_secret"] == s1
+
+
+def test_check_upserts_public_url(client: TestClient) -> None:
+    """A non-empty public_url upserts webhook_url; trailing slash stripped."""
+    _create_product(client)
+    key = _issue(client)
+    assert _read_license(key).webhook_url is None
+
+    r = client.post("/v1/check", json={
+        "key": key, "install_id": "i1", "version": "1.0.0",
+        "public_url": "https://tenant.example/asm-webhook/",
+    })
+    assert r.status_code == 200
+    assert _read_license(key).webhook_url == "https://tenant.example/asm-webhook"
+
+
+def test_check_public_url_omitted_leaves_webhook_url(client: TestClient) -> None:
+    """Heartbeats without public_url must not clear / change the stored URL."""
+    _create_product(client)
+    key = _issue(client)
+    client.post("/v1/check", json={
+        "key": key, "install_id": "i1", "version": "1.0.0",
+        "public_url": "https://tenant.example/asm-webhook",
+    })
+    # Subsequent heartbeat with no public_url field.
+    r = client.post("/v1/check", json={"key": key, "install_id": "i1", "version": "1.0.0"})
+    assert r.status_code == 200
+    assert _read_license(key).webhook_url == "https://tenant.example/asm-webhook"
+
+
+def test_check_public_url_rejects_non_http(client: TestClient) -> None:
+    """Non-http(s) schemes 400."""
+    _create_product(client)
+    key = _issue(client)
+    r = client.post("/v1/check", json={
+        "key": key, "install_id": "i1", "version": "1.0.0",
+        "public_url": "javascript:alert(1)",
+    })
+    assert r.status_code == 400
+    assert _read_license(key).webhook_url is None
+
+
+def test_check_public_url_rejects_overlong(client: TestClient) -> None:
+    """Length cap 500."""
+    _create_product(client)
+    key = _issue(client)
+    overlong = "https://x.example/" + "a" * 600
+    r = client.post("/v1/check", json={
+        "key": key, "install_id": "i1", "version": "1.0.0",
+        "public_url": overlong,
+    })
+    assert r.status_code == 400

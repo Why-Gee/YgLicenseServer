@@ -148,6 +148,8 @@ def test_status_change_fires_webhook(client: TestClient, monkeypatch) -> None:
     assert payload["type"] == "license.status.changed"
     assert payload["data"]["previous_status"] == "active"
     assert payload["data"]["current_status"] == "disabled"
+    # Receivers (ASM) index tenants by license_key — pin its presence.
+    assert payload["data"]["license_key"].startswith("asm_")
 
 
 def test_no_webhook_when_url_unset(client: TestClient, monkeypatch) -> None:
@@ -199,6 +201,7 @@ def test_delete_fires_license_deleted_webhook(client: TestClient, monkeypatch) -
     payload = json.loads(sent[0]["body"])
     assert payload["type"] == "license.deleted"
     assert payload["data"]["license_id"] == lid
+    assert payload["data"]["license_key"].startswith("asm_")
 
 
 # ---------- regression: race between webhook delivery and DB commit -------
