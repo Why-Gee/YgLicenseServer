@@ -1,11 +1,24 @@
 {% extends "base.html" %}
 {% block title %}Events{% endblock %}
 {% block content %}
-<h1>Events</h1>
+<div style="display:flex;align-items:center;justify-content:space-between;gap:1em;flex-wrap:wrap;">
+  <h1 style="margin:0;">Events</h1>
+  <a class="btn muted" href="/admin/events.csv" download>
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-2px;margin-right:.3em;" aria-hidden="true">
+      <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+      <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708z"/>
+    </svg>Save As CSV
+  </a>
+</div>
 <div class="card">
   {% if events %}
-  <table>
-    <thead><tr><th>When</th><th>Type</th><th>License</th><th>Note</th></tr></thead>
+  <table data-sortable>
+    <thead><tr>
+      <th data-sort-key="when" data-sort-type="date">When</th>
+      <th data-sort-key="type">Type</th>
+      <th data-sort-key="license">License</th>
+      <th data-sort-key="note">Note</th>
+    </tr></thead>
     <tbody>
     {% for e in events %}
       <tr>

@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Products{% endblock %}
+{% block content %}
+<h1>Products</h1>
+
+{% if request.query_params.get('deleted_products') %}
+<div class="success">
+  deleted {{ request.query_params.get('deleted_products') }} product(s)
+  and {{ request.query_params.get('deleted_licenses') }} license(s) under them.
+  audit trail preserved in events.
+</div>
+{% endif %}
+{% if request.query_params.get('error') %}
+<div class="error">{{ request.query_params.get('error') }}</div>
+{% endif %}
+
+<div class="card">
+  <div style="display:flex;align-items:center;justify-content:space-between;">
+    <h2 style="margin:0;">Products</h2>
+    <a class="btn" href="/admin/products/new">+ New Product</a>
+  </div>
+  {% if products %}
+  <form class="bulk-form" data-name="product_slugs" method="post"
+        action="/admin/products/delete"
+        data-confirm1-title="Delete {n} product(s)?"
+        data-confirm1-body="The selected product(s) and ALL licenses + installs under them will be removed. Audit-trail events are preserved."
+        data-confirm2-title="Final confirmation"
+        data-confirm2-body="This DESTROYS each product's Ed25519 keypair forever. Clients with the old pubkey baked into their image will reject every license you issue under a re-created product of the same slug. There is no recovery. Click Delete to proceed."
+        data-confirm2-label="Delete {n} product(s)">
+    <p style="margin:.5em 0;">
+      <button data-bulk-btn type="submit" class="btn danger" style="display:none">
+        Delete <span data-bulk-count>0</span> Selected
+      </button>
+      <span class="muted" style="margin-left:.5em;">irreversible: kills the keypair, all licenses, all installs.</span>
+    </p>
+    <table data-sortable>
+      <thead><tr>
+        <th style="width:1%;"><input type="checkbox" data-select-all title="Select All"></th>
+        <th data-sort-key="slug">Slug</th>
+        <th data-sort-key="name">Name</th>
+        <th data-sort-key="prefix">Prefix</th>
+        <th data-sort-key="licenses" data-sort-type="number">Licenses</th>
+        <th data-sort-key="created" data-sort-type="date">Created</th>
+        <th style="width:1%;"></th>
+      </tr></thead>
+      <tbody>
+      {% for p in products %}
+        <tr>
+          <td><input type="checkbox" name="product_slugs" value="{{ p.slug }}"></td>
+          <td><a href="/admin/products/{{ p.slug }}"><code>{{ p.slug }}</code></a></td>
+          <td>{{ p.name }}</td>
+          <td><code>{{ p.key_prefix }}_</code></td>
+          <td>{{ p.licenses | length }}</td>
+          <td class="muted">{{ p.created_at.strftime('%Y-%m-%d') }}</td>
+          <td>
+            <button type="submit" class="btn-icon"
+                    formaction="/admin/products/{{ p.slug }}/delete"
+                    formnovalidate
+                    title="Delete this product"
+                    aria-label="Delete this product"
+                    data-confirm-title="Delete this product?"
+                    data-confirm-body="Permanently removes the product and ALL licenses + installs under it. The Ed25519 keypair is destroyed forever — clients with the old pubkey baked in will reject any future license you issue under a re-created product of the same slug. Cannot be undone."
+                    data-confirm-label="Delete">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M6.5 1h3a.5.5 0 0 1 .5.5v1H6v-1a.5.5 0 0 1 .5-.5zM11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3A1.5 1.5 0 0 0 5 1.5v1H1.5a.5.5 0 0 0 0 1h.538l.853 10.66A2 2 0 0 0 4.885 16h6.23a2 2 0 0 0 1.994-1.84l.853-10.66h.538a.5.5 0 0 0 0-1H11zM4.5 5.5a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 0a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3.5.5a.5.5 0 0 0-1 0v8a.5.5 0 0 0 1 0V6z"/>
+              </svg>
+            </button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </form>
+  {% else %}
+  <p class="muted">no products yet — create one to start issuing licenses.</p>
+  {% endif %}
+</div>
+{% endblock %}

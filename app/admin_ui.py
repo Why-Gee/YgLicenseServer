@@ -103,8 +103,11 @@ def logout() -> Response:
 
 @router.get("/admin", response_class=HTMLResponse)
 def dashboard(request: Request, db: Session = Depends(get_db)) -> Response:
+    """Counter widgets + Recent Events. The full products list lives at
+    /admin/products since v0.7.1; dashboard keeps only the top-level KPIs."""
     _require_login(request)
-    products = db.query(Product).order_by(Product.created_at.desc()).all()
+    product_count = db.query(Product).count()
+    customer_count = db.query(Customer).count()
     total_licenses = db.query(License).count()
     active_licenses = db.query(License).filter_by(status="active").count()
     recent_events = (
@@ -114,7 +117,8 @@ def dashboard(request: Request, db: Session = Depends(get_db)) -> Response:
         request,
         "dashboard.html",
         {
-            "products": products,
+            "product_count": product_count,
+            "customer_count": customer_count,
             "total_licenses": total_licenses,
             "active_licenses": active_licenses,
             "recent_events": recent_events,
@@ -123,6 +127,16 @@ def dashboard(request: Request, db: Session = Depends(get_db)) -> Response:
 
 
 # ----- products ----------------------------------------------------------
+
+@router.get("/admin/products", response_class=HTMLResponse)
+def products_list(request: Request, db: Session = Depends(get_db)) -> Response:
+    """Full products listing — moved out of the dashboard in v0.7.1."""
+    _require_login(request)
+    products = db.query(Product).order_by(Product.created_at.desc()).all()
+    return templates.TemplateResponse(
+        request, "products.html", {"products": products},
+    )
+
 
 @router.get("/admin/products/new", response_class=HTMLResponse)
 def product_new_form(request: Request) -> Response:
@@ -703,9 +717,59 @@ def licenses_bulk_delete(
 def customers_list(request: Request, db: Session = Depends(get_db)) -> Response:
     _require_login(request)
     rows = db.query(Customer).order_by(Customer.created_at.desc()).all()
+    # Per-customer product slugs derived from their licenses. Distinct + sorted
+    # so the column reads deterministically and sortable-header text sort
+    # works as expected. Empty when a customer has no licenses.
+    products_by_customer: dict[str, list[str]] = {
+        c.id: sorted({lic.product.slug for lic in c.licenses if lic.product})
+        for c in rows
+    }
     return templates.TemplateResponse(
-        request, "customers.html", {"customers": rows}
+        request, "customers.html",
+        {"customers": rows, "products_by_customer": products_by_customer},
     )
+
+
+@router.post("/admin/customers/{cid}/edit")
+def customer_edit(
+    cid: str,
+    request: Request,
+    name: str = Form(""),
+    email: str = Form(...),
+    stripe_customer_id: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Edit a customer's name / email / stripe_customer_id. Email is the
+    natural-key used by license issuance dedupe, so changing it to an email
+    already owned by another customer is rejected (400 via ?error=)."""
+    _require_login(request)
+    cust = db.query(Customer).filter_by(id=cid).one_or_none()
+    if cust is None:
+        raise HTTPException(status_code=404)
+    new_email = email.strip()
+    if not new_email:
+        return RedirectResponse("/admin/customers?error=email+required", status_code=303)
+    if new_email != cust.email:
+        clash = (
+            db.query(Customer)
+            .filter(Customer.email == new_email, Customer.id != cid)
+            .one_or_none()
+        )
+        if clash is not None:
+            return RedirectResponse(
+                "/admin/customers?error=email+already+used+by+another+customer",
+                status_code=303,
+            )
+    cust.email = new_email
+    cust.name = name.strip() or None
+    cust.stripe_customer_id = stripe_customer_id.strip() or None
+    db.add(Event(
+        type="customer:edited",
+        payload={"customer_id": cust.id, "email": cust.email},
+        note="ui/customer-edit",
+    ))
+    db.commit()
+    return RedirectResponse(f"/admin/customers?edited={cust.id}", status_code=303)
 
 
 @router.get("/admin/events", response_class=HTMLResponse)
@@ -714,4 +778,36 @@ def events_list(request: Request, db: Session = Depends(get_db)) -> Response:
     rows = db.query(Event).order_by(Event.created_at.desc()).limit(500).all()
     return templates.TemplateResponse(
         request, "events.html", {"events": rows}
+    )
+
+
+@router.get("/admin/events.csv")
+def events_csv(request: Request, db: Session = Depends(get_db)) -> Response:
+    """Export the events log (most-recent 5000 rows) as CSV. Browser shows
+    the OS Save As dialog because of the attachment Content-Disposition."""
+    _require_login(request)
+    import csv
+    import io
+    rows = db.query(Event).order_by(Event.created_at.desc()).limit(5000).all()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["when", "type", "license_id", "product_id", "note", "payload"])
+    for e in rows:
+        # Payload is a JSON-able dict; serialize for the CSV cell. csv.writer
+        # quotes embedded commas/quotes automatically.
+        import json
+        payload = json.dumps(e.payload or {}, separators=(",", ":"))
+        w.writerow([
+            e.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            e.type,
+            e.license_id or "",
+            e.product_id or "",
+            e.note or "",
+            payload,
+        ])
+    filename = f"events-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.csv"
+    return Response(
+        buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

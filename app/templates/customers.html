@@ -2,18 +2,55 @@
 {% block title %}Customers{% endblock %}
 {% block content %}
 <h1>Customers</h1>
+
+{% if request.query_params.get('edited') %}
+<div class="success">customer updated.</div>
+{% endif %}
+{% if request.query_params.get('error') %}
+<div class="error">{{ request.query_params.get('error') }}</div>
+{% endif %}
+
 <div class="card">
   {% if customers %}
-  <table>
-    <thead><tr><th>Name</th><th>Email</th><th>Stripe ID</th><th>Licenses</th><th>Created</th></tr></thead>
+  <table data-sortable>
+    <thead><tr>
+      <th data-sort-key="name">Name</th>
+      <th data-sort-key="email">Email</th>
+      <th data-sort-key="stripe">Stripe ID</th>
+      <th data-sort-key="products">Products</th>
+      <th data-sort-key="licenses" data-sort-type="number">Licenses</th>
+      <th data-sort-key="created" data-sort-type="date">Created</th>
+      <th style="width:1%;"></th>
+    </tr></thead>
     <tbody>
     {% for c in customers %}
+      {% set product_slugs = products_by_customer.get(c.id, []) %}
       <tr>
-        <td>{% if c.name %}{{ c.name }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td data-sort-value="{{ (c.name or '')|lower }}">{% if c.name %}{{ c.name }}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td>{{ c.email }}</td>
         <td class="muted"><code>{{ c.stripe_customer_id or '—' }}</code></td>
+        <td data-sort-value="{{ product_slugs|join(',')|lower }}">
+          {% if product_slugs %}
+            {% for slug in product_slugs %}<a href="/admin/products/{{ slug }}"><code style="font-size:.85em;">{{ slug }}</code></a>{% if not loop.last %} {% endif %}{% endfor %}
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
         <td>{{ c.licenses | length }}</td>
         <td class="muted">{{ c.created_at.strftime('%Y-%m-%d') }}</td>
+        <td>
+          <button type="button" class="btn-icon" data-customer-edit
+                  data-id="{{ c.id }}"
+                  data-name="{{ c.name or '' }}"
+                  data-email="{{ c.email }}"
+                  data-stripe="{{ c.stripe_customer_id or '' }}"
+                  title="Edit this customer"
+                  aria-label="Edit this customer">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325"/>
+            </svg>
+          </button>
+        </td>
       </tr>
     {% endfor %}
     </tbody>
@@ -22,4 +59,49 @@
   <p class="muted">no customers yet.</p>
   {% endif %}
 </div>
+
+<div id="customer-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="cm-title">
+  <div class="modal-card" style="max-width:520px;">
+    <h3 id="cm-title">Edit Customer</h3>
+    <form id="cm-form" method="post" action="">
+      <label>Name <input type="text" id="cm-name" name="name"></label>
+      <label>Email <input type="email" id="cm-email" name="email" required></label>
+      <label>Stripe customer ID <input type="text" id="cm-stripe" name="stripe_customer_id" placeholder="cus_..."></label>
+      <div class="modal-actions">
+        <button type="button" class="btn muted" id="cm-cancel">Cancel</button>
+        <button type="submit" class="btn">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  var ov = document.getElementById('customer-modal');
+  var form = document.getElementById('cm-form');
+  var nameIn = document.getElementById('cm-name');
+  var emailIn = document.getElementById('cm-email');
+  var stripeIn = document.getElementById('cm-stripe');
+  var cancel = document.getElementById('cm-cancel');
+  function open(btn) {
+    nameIn.value = btn.dataset.name || '';
+    emailIn.value = btn.dataset.email || '';
+    stripeIn.value = btn.dataset.stripe || '';
+    form.action = '/admin/customers/' + btn.dataset.id + '/edit';
+    ov.style.display = '';
+    document.addEventListener('keydown', onKey);
+    setTimeout(function () { nameIn.focus(); }, 0);
+  }
+  function close() {
+    ov.style.display = 'none';
+    document.removeEventListener('keydown', onKey);
+  }
+  function onKey(e) { if (e.key === 'Escape') close(); }
+  document.querySelectorAll('[data-customer-edit]').forEach(function (btn) {
+    btn.addEventListener('click', function () { open(btn); });
+  });
+  cancel.addEventListener('click', close);
+  ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+})();
+</script>
 {% endblock %}
