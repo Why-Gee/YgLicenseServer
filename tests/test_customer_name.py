@@ -215,9 +215,11 @@ def test_product_detail_renders_name_column_and_modal_field(client: TestClient) 
     r = client.get("/admin/products/asm", cookies=cookies)
     assert r.status_code == 200
     body = r.content
-    # Header changes: Customer -> Customer Name + Customer Email.
-    assert b"<th>Customer Name</th>" in body
-    assert b"<th>Customer Email</th>" in body
+    # Header changes: Customer -> Customer Name + Customer Email. Headers
+    # carry data-sort-key attributes (sortable tables), so match just the
+    # label text inside any <th ...>.
+    assert b">Customer Name</th>" in body
+    assert b">Customer Email</th>" in body
     # Row value present.
     assert b"Acme Animal Shelter" in body
     # Modal field present.

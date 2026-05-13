@@ -12,8 +12,6 @@ import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
 
-log = logging.getLogger("license-server.admin")
-
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -27,6 +25,8 @@ from app.config import get_settings
 from app.db import get_db
 from app.models import Customer, Event, Install, License, Product
 from app.signing import generate_keypair
+
+log = logging.getLogger("license-server.admin")
 
 router = APIRouter()
 TEMPLATES_DIR = Path(__file__).parent / "templates"

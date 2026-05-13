@@ -16,6 +16,7 @@ Admin (Bearer ADMIN_TOKEN):
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import secrets
 from datetime import datetime, timedelta
@@ -25,11 +26,14 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app import webhooks
 from app.config import get_settings
 from app.db import get_db
 from app.email import send_license_email
 from app.models import Customer, Event, Install, License, Product
 from app.signing import generate_keypair, sign_license_jwt
+
+log = logging.getLogger("license-server.api")
 
 router = APIRouter()
 
@@ -43,6 +47,10 @@ class CheckIn(BaseModel):
     key: str
     install_id: str
     version: str
+    # Optional self-reported webhook URL. Lets a per-tenant ASM install
+    # register its outbound URL during phone-home (no admin UI step).
+    # Accepted iff http(s):// and <=500 chars; trailing '/' stripped.
+    public_url: str | None = None
 
 
 class CheckOut(BaseModel):
@@ -52,6 +60,12 @@ class CheckOut(BaseModel):
     max_users: int
     license_id: str
     product: str
+    # HMAC signing key for inbound webhooks. Auto-minted on first /v1/check
+    # if absent so the receiver always has something to verify with.
+    webhook_secret: str
+
+
+_PUBLIC_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
 
 @router.post("/v1/check", response_model=CheckOut)
@@ -65,6 +79,22 @@ def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> Che
         raise HTTPException(status_code=401, detail={"reason": "disabled"})
     if lic.valid_until < datetime.utcnow():
         raise HTTPException(status_code=401, detail={"reason": "expired"})
+
+    # Self-registered webhook URL. Strip trailing slash, validate, upsert
+    # only when changed so we don't churn the row on every heartbeat.
+    if body.public_url is not None and body.public_url.strip():
+        candidate = body.public_url.strip().rstrip("/")
+        if len(candidate) > 500 or not _PUBLIC_URL_RE.match(candidate):
+            raise HTTPException(status_code=400, detail={"reason": "invalid_public_url"})
+        if lic.webhook_url != candidate:
+            log.info("license %s webhook_url updated to %s", lic.id, candidate)
+            lic.webhook_url = candidate
+
+    # Ensure a webhook_secret always exists -- receivers need it to verify
+    # inbound pushes, and self-registering installs can't bootstrap one any
+    # other way. Generated lazily on first phone-home; idempotent thereafter.
+    if not lic.webhook_secret:
+        lic.webhook_secret = webhooks.generate_secret()
 
     ip_hash = (
         hashlib.sha256((request.client.host if request.client else "").encode()).hexdigest()
@@ -111,6 +141,7 @@ def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> Che
         max_users=lic.max_users,
         license_id=lic.id,
         product=lic.product.slug,
+        webhook_secret=lic.webhook_secret,
     )
 
 

@@ -118,6 +118,7 @@ def deliver_status_change(
         return None
     data = {
         "license_id": license_obj.id,
+        "license_key": license_obj.key,
         "key": license_obj.key,
         "product_slug": license_obj.product.slug if license_obj.product else None,
         "customer_email": license_obj.customer.email if license_obj.customer else None,
@@ -141,6 +142,7 @@ def deliver_update(
         return None
     data = {
         "license_id": license_obj.id,
+        "license_key": license_obj.key,
         "key": license_obj.key,
         "product_slug": license_obj.product.slug if license_obj.product else None,
         "customer_email": license_obj.customer.email if license_obj.customer else None,
@@ -161,6 +163,7 @@ def deliver_deleted(
     caller passes the snapshot fields directly."""
     data = {
         "license_id": license_id,
+        "license_key": key,
         "key": key,
         "product_slug": product_slug,
         "customer_email": customer_email,
