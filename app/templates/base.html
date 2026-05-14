@@ -69,6 +69,16 @@
     th[data-sort-key]::after { content:""; display:inline-block; width:0; }
     th[aria-sort="ascending"]::after  { content:" \25B2"; color:var(--accent); font-size:.8em; }
     th[aria-sort="descending"]::after { content:" \25BC"; color:var(--accent); font-size:.8em; }
+    /* Busy/loading state — set on a submit button while its form's POST is in
+       flight (server round-trip + redirect can take a few seconds for actions
+       that fan out a webhook). Prevents double-click while the request runs. */
+    .btn-spinner { display:inline-block; width:14px; height:14px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:btn-spin .7s linear infinite; vertical-align:middle; }
+    .btn-spinner.sm { width:12px; height:12px; border-width:2px; }
+    @keyframes btn-spin { to { transform:rotate(360deg); } }
+    button[aria-busy="true"], .btn[aria-busy="true"] { cursor:wait; }
+    .toggle-switch.loading { display:inline-flex; align-items:center; justify-content:center; }
+    .toggle-switch.loading::before { display:none; }
+    .toggle-switch.loading .btn-spinner { color:#fff; width:12px; height:12px; border-width:2px; }
   </style>
 </head>
 <body>
@@ -157,6 +167,41 @@
         btn.click();
       });
     });
+
+    // Show a spinner on a submit button while its form's POST is in flight.
+    // Replaces the button's inner content with a spinner and disables it so
+    // double-clicks during the round-trip can't fire a second request. The
+    // form has already collected its data by the time the 'submit' event
+    // fires, so disabling here doesn't block the in-flight request. No-JS
+    // fallback: if this script doesn't run, the form still submits normally.
+    window.showButtonBusy = function (btn) {
+      if (!btn || btn.dataset.busy === '1') return;
+      btn.dataset.busy = '1';
+      btn.setAttribute('aria-busy', 'true');
+      // Lock dimensions so the spinner doesn't collapse the button.
+      var w = btn.offsetWidth, h = btn.offsetHeight;
+      if (w) btn.style.minWidth = w + 'px';
+      if (h) btn.style.minHeight = h + 'px';
+      if (btn.classList.contains('toggle-switch')) {
+        btn.classList.add('loading');
+        btn.innerHTML = '<span class="btn-spinner" aria-hidden="true"></span>';
+      } else {
+        var sm = btn.classList.contains('btn-icon') ? ' sm' : '';
+        btn.innerHTML = '<span class="btn-spinner' + sm + '" aria-hidden="true"></span>';
+      }
+      // Disable AFTER the current event tick so the browser has already
+      // packaged the submitter into the outgoing request.
+      setTimeout(function () { btn.disabled = true; }, 0);
+    };
+
+    // Catch every native form submit and spinner-ify the triggering button.
+    // e.submitter is the button that initiated the submit (works for buttons
+    // with formaction too). form.submit() does NOT fire this event, so
+    // handlers that call form.submit() (bulk-form below) call showButtonBusy
+    // themselves.
+    document.addEventListener('submit', function (e) {
+      if (e.submitter) window.showButtonBusy(e.submitter);
+    }, true);
 
     // Generic copy-to-clipboard. Any <button data-copy-from="#selector"> grabs
     // the textContent of the matched element and writes it to the clipboard.
@@ -283,6 +328,8 @@
           });
           if (!ok2) return;
           form.dataset.confirmed = '1';
+          // form.submit() bypasses the 'submit' event, so spinner-ify manually.
+          window.showButtonBusy(btn);
           form.submit();
         });
         update();

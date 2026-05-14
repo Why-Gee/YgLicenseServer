@@ -95,9 +95,12 @@
             {% if lic.webhook_url %}<span class="badge active">On</span>{% else %}<span class="muted">—</span>{% endif %}
           </td>
           <td style="white-space:nowrap;">
-            {# Toggle: ON = status active. Click flips to /disable or /enable. #}
+            {# Toggle: ON = status active. Click flips to /disable or /enable.
+               Label reflects current state — the Status column badge says the
+               same, but a per-row label here makes the toggle's meaning clear
+               without hovering for the title tooltip. #}
             {% set is_on = lic.status == 'active' %}
-            <span class="toggle-label">Enable</span>
+            <span class="toggle-label">{{ 'Enabled' if is_on else 'Disabled' }}</span>
             <button type="submit"
                     class="toggle-switch {{ 'on' if is_on else 'off' }}"
                     formaction="/admin/licenses/{{ lic.id }}/{{ 'disable' if is_on else 'enable' }}"
