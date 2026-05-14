@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Response, status as http_status
+from fastapi import FastAPI, Response
+from fastapi import status as http_status
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
