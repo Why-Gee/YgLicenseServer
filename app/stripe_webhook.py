@@ -8,23 +8,41 @@ Handles:
   invoice.paid              -> extend valid_until 30d, status=active
   invoice.payment_failed    -> status=delinquent
   customer.subscription.deleted -> status=revoked
+
+Idempotency: every successfully signed event is recorded by event.id in the
+processed_stripe_events table BEFORE any side effects fire. A redelivered
+event (same id) short-circuits without mutating any license. Stripe retries
+the same event on receiver 5xx/timeout, so this guard is load-bearing.
 """
 from __future__ import annotations
 
 import logging
 import secrets
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import stripe
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+
+# `SignatureVerificationError` lived at `stripe.error.SignatureVerificationError`
+# in older releases and moved to a top-level alias on stripe>=8. Import the
+# top-level name with a fallback so we work on both shapes without pinning.
+try:  # pragma: no cover - import-time compat
+    from stripe import SignatureVerificationError
+except ImportError:  # pragma: no cover
+    from stripe.error import SignatureVerificationError  # type: ignore[no-redef]
 
 from app.db import get_db
 from app.email import send_license_email
-from app.models import Customer, Event, License, Product
+from app.models import Customer, Event, License, ProcessedStripeEvent, Product
 
 log = logging.getLogger("license-server.stripe")
 router = APIRouter()
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 @router.post("/v1/products/{slug}/stripe-webhook")
@@ -43,11 +61,34 @@ async def stripe_webhook(
     payload = await request.body()
     try:
         event = stripe.Webhook.construct_event(payload, stripe_signature, p.stripe_webhook_secret)
-    except (ValueError, stripe.error.SignatureVerificationError) as e:
+    except (ValueError, SignatureVerificationError) as e:
         log.warning("invalid stripe webhook for %s: %s", slug, e)
         raise HTTPException(status_code=400, detail="invalid signature") from e
 
+    event_id = event.get("id")
     event_type = event["type"]
+    if not event_id:
+        # No id = malformed event. Process best-effort but don't index it.
+        log.warning("stripe event missing id for %s: %s", slug, event_type)
+    else:
+        # Idempotency guard: claim the event.id by inserting into the
+        # dedup table inside its own savepoint. A duplicate delivery
+        # collides on PK -> we 200 immediately without firing side effects.
+        already_processed = (
+            db.query(ProcessedStripeEvent).filter_by(id=event_id).one_or_none()
+        )
+        if already_processed is not None:
+            log.info("stripe event %s already processed; skipping", event_id)
+            return {"received": True, "type": event_type, "product": slug, "duplicate": True}
+        db.add(ProcessedStripeEvent(id=event_id, product_id=p.id, type=event_type))
+        try:
+            db.flush()
+        except IntegrityError:
+            # Lost a race against a concurrent delivery of the same event.
+            db.rollback()
+            log.info("stripe event %s claimed by concurrent delivery; skipping", event_id)
+            return {"received": True, "type": event_type, "product": slug, "duplicate": True}
+
     obj = event["data"]["object"]
     customer_id = obj.get("customer")
 
@@ -92,7 +133,7 @@ def _extend_or_create(
             plan="standard",
             max_users=10,
             features={},
-            valid_until=datetime.utcnow() + timedelta(days=30),
+            valid_until=_utcnow() + timedelta(days=30),
             status="active",
         )
         db.add(lic)
@@ -102,7 +143,7 @@ def _extend_or_create(
         ))
         send_license_email(to=cust.email, key=key, product_name=product.name)
     else:
-        floor = datetime.utcnow()
+        floor = _utcnow()
         base = max(lic.valid_until, floor)
         lic.valid_until = base + timedelta(days=30)
         lic.status = "active"

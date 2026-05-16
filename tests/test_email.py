@@ -4,42 +4,40 @@ from __future__ import annotations
 import importlib
 import json
 from contextlib import contextmanager
-from io import BytesIO
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 
 @contextmanager
 def _captured(monkeypatch, status: int = 200):
-    """Patch urllib.request.urlopen to capture POST payloads."""
+    """Capture outbound posts via httpx.MockTransport. Replaces the shared
+    `app.http_client.get_client()` with a transport-mocked client; the
+    captured list mirrors the pre-httpx test contract (url + headers + body)."""
     sent: list[dict] = []
 
-    class _Resp:
-        def __init__(self, code: int) -> None:
-            self.status = code
-            self._body = BytesIO(b'{"id":"e_test"}')
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def read(self) -> bytes:
-            return self._body.read()
-
-    def _fake_urlopen(req, timeout=None):
+    def _handler(req: httpx.Request) -> httpx.Response:
         sent.append({
-            "url": req.full_url,
+            "url": str(req.url),
             "headers": dict(req.headers),
-            "body": json.loads(req.data.decode()),
+            "body": json.loads(req.content.decode()) if req.content else {},
         })
-        return _Resp(status)
+        return httpx.Response(status, content=b'{"id":"e_test"}')
 
-    import app.email as email_mod
-    monkeypatch.setattr(email_mod.urllib.request, "urlopen", _fake_urlopen)
-    yield sent
+    test_client = httpx.Client(
+        transport=httpx.MockTransport(_handler), follow_redirects=False,
+    )
+    import app.http_client as hc
+    # Set the module-level singleton directly. Callers do
+    # `from app.http_client import get_client` at import time, so patching
+    # `hc.get_client` wouldn't reach them; patching the underlying _client
+    # global does (every get_client() call dereferences it).
+    monkeypatch.setattr(hc, "_client", test_client)
+    try:
+        yield sent
+    finally:
+        test_client.close()
 
 
 @pytest.fixture
@@ -95,7 +93,7 @@ def test_admin_issue_sends_email(client: TestClient, monkeypatch) -> None:
     assert len(sent) == 1
     msg = sent[0]
     assert msg["url"] == "https://api.resend.com/emails"
-    assert msg["headers"]["Authorization"] == "Bearer re_test_key"
+    assert msg["headers"]["authorization"] == "Bearer re_test_key"
     assert msg["body"]["to"] == ["buyer@example.com"]
     assert "Animal Shelter Manager" in msg["body"]["subject"]
     assert key in msg["body"]["text"]

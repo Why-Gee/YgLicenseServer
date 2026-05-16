@@ -6,30 +6,10 @@ monitors and load balancers can react.
 """
 from __future__ import annotations
 
-import importlib
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError
-
-
-@pytest.fixture
-def client(tmp_path, monkeypatch) -> TestClient:
-    db_path = tmp_path / "license.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
-    monkeypatch.setenv("ADMIN_TOKEN", "test-admin")
-    monkeypatch.setenv("SESSION_SECRET", "test-admin")
-    monkeypatch.setenv("COOKIE_SECURE", "false")
-
-    import app.config as cfg
-    import app.db as db
-    importlib.reload(cfg)
-    importlib.reload(db)
-    import app.main as m
-    importlib.reload(m)
-    db.init_db()
-    return TestClient(m.app)
 
 
 def test_healthz_returns_200_with_version(client: TestClient) -> None:

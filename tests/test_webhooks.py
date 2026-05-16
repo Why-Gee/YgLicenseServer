@@ -6,42 +6,40 @@ import hmac
 import importlib
 import json
 from contextlib import contextmanager
-from io import BytesIO
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 
 @contextmanager
 def _captured(monkeypatch, status: int = 200):
-    """Patch urllib.request.urlopen to capture POST payloads sent by webhooks."""
+    """Capture outbound posts via httpx.MockTransport. The captured list
+    keeps the pre-httpx contract: each entry is {url, headers, body} where
+    headers are lowercased (HTTP/2 norm) and body is the JSON string."""
     sent: list[dict] = []
 
-    class _Resp:
-        def __init__(self, code: int) -> None:
-            self.status = code
-            self._body = BytesIO(b'{"ok":true}')
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def read(self) -> bytes:
-            return self._body.read()
-
-    def _fake_urlopen(req, timeout=None):
+    def _handler(req: httpx.Request) -> httpx.Response:
         sent.append({
-            "url": req.full_url,
+            "url": str(req.url),
             "headers": dict(req.headers),
-            "body": req.data.decode(),
+            "body": req.content.decode() if req.content else "",
         })
-        return _Resp(status)
+        return httpx.Response(status, content=b'{"ok":true}')
 
-    import app.webhooks as wh
-    monkeypatch.setattr(wh.urllib.request, "urlopen", _fake_urlopen)
-    yield sent
+    test_client = httpx.Client(
+        transport=httpx.MockTransport(_handler), follow_redirects=False,
+    )
+    import app.http_client as hc
+    # Set the module-level singleton directly. Callers do
+    # `from app.http_client import get_client` at import time, so patching
+    # `hc.get_client` wouldn't reach them; patching the underlying _client
+    # global does (every get_client() call dereferences it).
+    monkeypatch.setattr(hc, "_client", test_client)
+    try:
+        yield sent
+    finally:
+        test_client.close()
 
 
 @pytest.fixture
@@ -141,9 +139,9 @@ def test_status_change_fires_webhook(client: TestClient, monkeypatch) -> None:
     assert len(sent) == 1
     msg = sent[0]
     assert msg["url"] == "https://example.test/webhook"
-    assert msg["headers"]["X-license-server-event"] == "license.status.changed"
-    assert "X-license-server-signature" in msg["headers"]
-    assert "X-license-server-event-id" in msg["headers"]
+    assert msg["headers"]["x-license-server-event"] == "license.status.changed"
+    assert "x-license-server-signature" in msg["headers"]
+    assert "x-license-server-event-id" in msg["headers"]
     payload = json.loads(msg["body"])
     assert payload["type"] == "license.status.changed"
     assert payload["data"]["previous_status"] == "active"
@@ -227,30 +225,12 @@ def _get_license_key(lid: str) -> str:
 
 @contextmanager
 def _reentrant_check(monkeypatch, client: TestClient, key: str):
-    """Patch urlopen so each webhook delivery synchronously calls /v1/check
-    on the same TestClient. Captures (status_code, json_body) of the inner
-    /v1/check response so the outer test can assert what the receiver would
-    have seen at the moment the webhook fired."""
+    """MockTransport handler that synchronously calls /v1/check on the same
+    TestClient. Mimics a real receiver doing a sanity-check phone-home from
+    inside its webhook handler -- pins the post-commit visibility contract."""
     captured: list[tuple[int, dict]] = []
 
-    class _Resp:
-        def __init__(self) -> None:
-            self.status = 200
-            self._body = BytesIO(b'{"ok":true}')
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def read(self) -> bytes:
-            return self._body.read()
-
-    def _fake_urlopen(req, timeout=None):
-        # This runs inside the admin handler's request, while the helper
-        # has just committed the status flip. A real receiver would call
-        # back into /v1/check; we mimic that here.
+    def _handler(req: httpx.Request) -> httpx.Response:
         r = client.post(
             "/v1/check",
             json={"key": key, "install_id": "test-install", "version": "1.0.0"},
@@ -259,11 +239,21 @@ def _reentrant_check(monkeypatch, client: TestClient, key: str):
             captured.append((r.status_code, r.json()))
         except Exception:
             captured.append((r.status_code, {}))
-        return _Resp()
+        return httpx.Response(200, content=b'{"ok":true}')
 
-    import app.webhooks as wh
-    monkeypatch.setattr(wh.urllib.request, "urlopen", _fake_urlopen)
-    yield captured
+    test_client = httpx.Client(
+        transport=httpx.MockTransport(_handler), follow_redirects=False,
+    )
+    import app.http_client as hc
+    # Set the module-level singleton directly. Callers do
+    # `from app.http_client import get_client` at import time, so patching
+    # `hc.get_client` wouldn't reach them; patching the underlying _client
+    # global does (every get_client() call dereferences it).
+    monkeypatch.setattr(hc, "_client", test_client)
+    try:
+        yield captured
+    finally:
+        test_client.close()
 
 
 def test_disable_webhook_callback_sees_disabled_status(
@@ -457,7 +447,7 @@ def test_signature_verifies_with_secret_in_db(client: TestClient, monkeypatch) -
     with _captured(monkeypatch) as sent:
         client.post(f"/admin/licenses/{lid}/disable", cookies=cookies, follow_redirects=False)
     msg = sent[0]
-    sig_header = msg["headers"]["X-license-server-signature"]
+    sig_header = msg["headers"]["x-license-server-signature"]
     parts = dict(p.split("=", 1) for p in sig_header.split(","))
 
     # Fetch the secret directly from DB.

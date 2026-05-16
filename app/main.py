@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi import status as http_status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import __version__
+from app.admin_ui import _LoginRequired
 from app.admin_ui import router as admin_ui_router
 from app.api import router as api_router
 from app.db import SessionLocal
@@ -32,6 +34,13 @@ app = FastAPI(title="YgLicenseServer", version=__version__, lifespan=lifespan)
 app.include_router(api_router)
 app.include_router(stripe_router)
 app.include_router(admin_ui_router)
+
+
+@app.exception_handler(_LoginRequired)
+async def _login_required_handler(_request: Request, _exc: _LoginRequired) -> Response:
+    """Unauthenticated admin-page hit → real 303 to /admin/login. Lets every
+    handler just call _require_login() without threading a return-redirect."""
+    return RedirectResponse("/admin/login", status_code=303)
 
 
 # Kubernetes-convention health endpoints. /healthz is pure liveness — proves

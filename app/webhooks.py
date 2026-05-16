@@ -14,6 +14,14 @@ Inspired by Stripe's webhook design:
 - Constant-time signature comparison on the receiver
 - Each delivery has a unique X-License-Server-Event-Id for dedup
 
+Transport notes:
+- Uses the shared httpx.Client from app.http_client. Redirects are
+  disabled there, so a hostile receiver can't 302 us to an internal IP.
+- Right before each call we run app.security.is_safe_for_delivery(). A
+  URL that resolves to a private/loopback/link-local addr is refused with
+  no request sent. DNS failures pass through (the HTTP call will surface
+  the same error and there's no SSRF risk if the name doesn't resolve).
+
 Receiver pseudo-code (any language):
 
     secret = os.environ["LICENSE_WEBHOOK_SECRET"]
@@ -36,10 +44,13 @@ import json
 import logging
 import secrets
 import time
-import urllib.error
-import urllib.request
 import uuid
 from typing import Any
+
+import httpx
+
+from app.http_client import get_client
+from app.security import is_safe_for_delivery
 
 log = logging.getLogger("license-server.webhooks")
 
@@ -67,11 +78,20 @@ def deliver(
 ) -> tuple[bool, int | None, str | None]:
     """POST a signed event to url. Returns (ok, http_status, error_msg).
 
-    Best-effort: any exception (network, DNS, timeout) returns (False, None, err).
-    Non-2xx HTTP returns (False, status, body_excerpt). Don't raise -- the caller
-    is the request that triggered the status change, and we never want a webhook
-    delivery to break license-issuance/disable/etc.
+    Best-effort: any network exception returns (False, None, err); non-2xx
+    HTTP returns (False, status, body_excerpt). Don't raise -- the caller
+    is the request that triggered the status change, and we never want a
+    webhook delivery to break license-issuance/disable/etc.
+
+    A URL that resolves to a private/loopback IP is refused before sending
+    (SSRF guard). DNS failures are not refused; httpx will surface the
+    same error path naturally.
     """
+    ok_url, reason = is_safe_for_delivery(url, allow_http=True)
+    if not ok_url and reason and reason.startswith(("unsafe_url_shape", "resolves_to_private")):
+        log.error("refusing webhook to unsafe url: %s (%s)", url, reason)
+        return False, None, f"refused:{reason}"
+
     event_id = str(uuid.uuid4())
     timestamp = int(time.time())
     payload = {
@@ -82,31 +102,25 @@ def deliver(
     }
     body = json.dumps(payload, separators=(",", ":")).encode()
     sig = sign(secret, timestamp, body)
-    req = urllib.request.Request(
-        url, data=body, method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "X-License-Server-Event": event_type,
-            "X-License-Server-Event-Id": event_id,
-            "X-License-Server-Signature": f"t={timestamp},v1={sig}",
-            "User-Agent": "YgLicenseServer-webhook/1",
-        },
-    )
+    headers = {
+        "Content-Type": "application/json",
+        "X-License-Server-Event": event_type,
+        "X-License-Server-Event-Id": event_id,
+        "X-License-Server-Signature": f"t={timestamp},v1={sig}",
+    }
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            status = resp.status
-            if 200 <= status < 300:
-                log.info("webhook delivered: %s %s -> %s", event_type, url, status)
-                return True, status, None
-            log.warning("webhook non-2xx: %s %s -> %s", event_type, url, status)
-            return False, status, None
-    except urllib.error.HTTPError as e:
-        excerpt = e.read()[:200].decode("utf-8", "replace") if hasattr(e, "read") else ""
-        log.warning("webhook HTTPError: %s %s -> %s (%s)", event_type, url, e.code, excerpt)
-        return False, e.code, excerpt
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        r = get_client().post(url, content=body, headers=headers, timeout=timeout)
+    except httpx.HTTPError as e:
         log.warning("webhook send failed: %s %s: %s", event_type, url, e)
         return False, None, str(e)
+
+    status = r.status_code
+    if 200 <= status < 300:
+        log.info("webhook delivered: %s %s -> %s", event_type, url, status)
+        return True, status, None
+    excerpt = r.text[:200] if r.text else ""
+    log.warning("webhook non-2xx: %s %s -> %s (%s)", event_type, url, status, excerpt)
+    return False, status, excerpt
 
 
 def deliver_status_change(

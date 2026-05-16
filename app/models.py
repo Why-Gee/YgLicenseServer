@@ -10,14 +10,35 @@ key — no cross-product leakage even with one shared DB.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+# Allowed license status values. Kept in sync with the CheckConstraint on
+# License.status and with the status:* event-type strings emitted in
+# admin_ui.py and stripe_webhook.py.
+LICENSE_STATUSES = ("active", "delinquent", "disabled", "revoked")
 
 
 def _uuid() -> str:
     return str(uuid.uuid4())
+
+
+def _utcnow_naive() -> datetime:
+    """Tz-naive UTC default for DateTime columns. SQLAlchemy stores these as
+    naive in SQLite and as TIMESTAMP WITHOUT TIME ZONE in Postgres; using
+    datetime.now(UTC).replace(tzinfo=None) silences the utcnow() deprecation
+    warning without changing the wire format."""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class Base(DeclarativeBase):
@@ -49,9 +70,15 @@ class Product(Base):
     # JWT issuer claim for tokens minted on behalf of this product.
     jwt_issuer: Mapped[str] = mapped_column(String(64))
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
 
-    licenses: Mapped[list[License]] = relationship(back_populates="product")
+    licenses: Mapped[list[License]] = relationship(
+        back_populates="product",
+        # No cascade-delete on the relationship: products are deleted by the
+        # _delete_product helper which walks each license through
+        # _delete_license (fires webhook, snapshots audit row). Cascade here
+        # would skip that path.
+    )
 
 
 class Customer(Base):
@@ -61,17 +88,28 @@ class Customer(Base):
     stripe_customer_id: Mapped[str | None] = mapped_column(
         String(64), unique=True, nullable=True, index=True
     )
-    email: Mapped[str] = mapped_column(String(320), index=True)
+    # Unique to prevent races where two concurrent admin_issue / Stripe paid
+    # events both see "no customer" and create two rows for the same address.
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     # Optional display name. Populated from the issue/edit form; falls back
     # to email in the UI when blank.
     name: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
 
     licenses: Mapped[list[License]] = relationship(back_populates="customer")
 
 
 class License(Base):
     __tablename__ = "licenses"
+    __table_args__ = (
+        # Enforce the documented status vocabulary at the DB layer so a typo
+        # in code (`disabld`) doesn't silently brick a row -- /v1/check
+        # compares status exactly and an off-by-one value would 200 forever.
+        CheckConstraint(
+            f"status IN {LICENSE_STATUSES!r}",
+            name="ck_licenses_status",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     product_id: Mapped[str] = mapped_column(ForeignKey("products.id"), index=True)
@@ -81,10 +119,10 @@ class License(Base):
     max_users: Mapped[int] = mapped_column(Integer, default=10)
     features: Mapped[dict] = mapped_column(JSON, default=dict)
     valid_until: Mapped[datetime] = mapped_column(DateTime)
-    # Allowed values: active | delinquent | disabled | revoked.
-    # disabled = soft toggle (admin can re-enable). revoked = intended permanent.
+    # Allowed values: see LICENSE_STATUSES. disabled = soft toggle (admin can
+    # re-enable). revoked = intended permanent. Enforced by ck_licenses_status.
     status: Mapped[str] = mapped_column(String(16), default="active")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
 
     # Optional outbound webhook. When set, LS POSTs status-change / delete
     # events to webhook_url, signed with webhook_secret (HMAC-SHA256). Lets
@@ -94,7 +132,13 @@ class License(Base):
 
     product: Mapped[Product] = relationship(back_populates="licenses")
     customer: Mapped[Customer] = relationship(back_populates="licenses")
-    installs: Mapped[list[Install]] = relationship(back_populates="license")
+    # When a License is deleted, fan out and delete its Installs in the same
+    # session flush. Events get their license_id NULL'd in the delete helper
+    # so the audit trail survives, but installs are operationally pointless
+    # once the parent license is gone.
+    installs: Mapped[list[Install]] = relationship(
+        back_populates="license", cascade="all, delete-orphan"
+    )
 
 
 class Install(Base):
@@ -104,7 +148,7 @@ class Install(Base):
     license_id: Mapped[str] = mapped_column(ForeignKey("licenses.id"), index=True)
     install_id: Mapped[str] = mapped_column(String(64), index=True)
     version: Mapped[str] = mapped_column(String(32))
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
     ip_addr_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     license: Mapped[License] = relationship(back_populates="installs")
@@ -122,5 +166,23 @@ class Event(Base):
     )
     type: Mapped[str] = mapped_column(String(64), index=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive, index=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ProcessedStripeEvent(Base):
+    """Idempotency table for Stripe webhook delivery. Stripe occasionally
+    redelivers the same event.id (network blip, manual retry); without this
+    table an invoice.paid redelivery would extend valid_until twice.
+
+    Inserted inside the stripe_webhook handler before any side effect; if the
+    insert collides on the PK we skip the event."""
+
+    __tablename__ = "processed_stripe_events"
+
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)  # stripe event id
+    product_id: Mapped[str | None] = mapped_column(
+        ForeignKey("products.id"), nullable=True, index=True
+    )
+    type: Mapped[str] = mapped_column(String(64))
+    processed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive, index=True)
