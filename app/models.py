@@ -21,6 +21,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy import event as sa_event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 # Allowed license status values. Kept in sync with the CheckConstraint on
@@ -164,10 +165,45 @@ class Event(Base):
     product_id: Mapped[str | None] = mapped_column(
         ForeignKey("products.id"), nullable=True, index=True
     )
+    # Polymorphic audit pointer. license_id/product_id are FK-enforced and
+    # get NULL'd when the parent row is deleted; subject_kind+subject_id
+    # store the natural identity at event-emission time so a "what happened
+    # to license X" query still resolves after X is gone. Indexed on
+    # (subject_kind, subject_id) so the join works without a fan-out scan.
+    subject_kind: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    subject_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     type: Mapped[str] = mapped_column(String(64), index=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive, index=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+@sa_event.listens_for(Event, "before_insert")
+def _event_autofill_subject(_mapper, _conn, target: Event) -> None:
+    """Auto-populate subject_kind+subject_id from whichever FK is set, so
+    call sites don't have to thread it through. Licenses take precedence
+    when both are set (the event is about the license; product is context)."""
+    if target.subject_id:
+        return
+    if target.license_id:
+        target.subject_kind = "license"
+        target.subject_id = target.license_id
+    elif target.product_id:
+        target.subject_kind = "product"
+        target.subject_id = target.product_id
+    elif target.payload:
+        # Deletion audits write license_id=None but stash the dead id in
+        # payload (e.g. payload['license_id']). Pick it up so the trail
+        # remains queryable.
+        pid = target.payload.get("license_id") if isinstance(target.payload, dict) else None
+        if pid:
+            target.subject_kind = "license"
+            target.subject_id = str(pid)
+            return
+        pid = target.payload.get("product_id") if isinstance(target.payload, dict) else None
+        if pid:
+            target.subject_kind = "product"
+            target.subject_id = str(pid)
 
 
 class ProcessedStripeEvent(Base):

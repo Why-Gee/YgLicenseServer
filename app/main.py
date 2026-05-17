@@ -27,7 +27,46 @@ async def lifespan(_app: FastAPI):
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         force=True,
     )
+    _validate_secrets_at_boot()
     yield
+
+
+def _validate_secrets_at_boot() -> None:
+    """Fail loud if ADMIN_TOKEN / SESSION_SECRET are unset in production. The
+    request-time checks return 503, but a server that boots green into
+    "every admin route 503s" was easy to miss in deploy logs. Logging at
+    CRITICAL means oncall sees it; setting LICENSE_SERVER_REQUIRE_SECRETS=1
+    converts the warning into a hard exit for stricter deploys."""
+    import os
+    import sys
+
+    from app.config import get_settings
+
+    s = get_settings()
+    log = logging.getLogger("license-server.boot")
+    missing = []
+    if not s.admin_token:
+        missing.append("ADMIN_TOKEN")
+    if not s.session_secret:
+        missing.append("SESSION_SECRET")
+    # KEK is a soft-warning: signing still works without it (plaintext PEMs
+    # in DB), but at-rest encryption is the desired posture in production.
+    if not s.key_encryption_key:
+        log.warning(
+            "LICENSE_KEY_ENCRYPTION_KEY unset; product private keys are "
+            "stored as plaintext PEM in the DB. Generate with "
+            "`python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`"
+        )
+    if not missing:
+        return
+    msg = (
+        f"missing required secrets: {', '.join(missing)}; admin UI and JSON "
+        "admin API will return 503 for every request"
+    )
+    if os.environ.get("LICENSE_SERVER_REQUIRE_SECRETS", "").lower() in ("1", "true", "yes"):
+        log.critical(msg + " (LICENSE_SERVER_REQUIRE_SECRETS=1 set; aborting)")
+        sys.exit(78)  # EX_CONFIG
+    log.critical(msg)
 
 
 app = FastAPI(title="YgLicenseServer", version=__version__, lifespan=lifespan)

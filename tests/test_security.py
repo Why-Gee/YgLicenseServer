@@ -195,3 +195,46 @@ def test_stripe_event_idempotent(client: TestClient, monkeypatch) -> None:
     with SessionLocal() as s:
         lic = s.query(License).first()
         assert lic.valid_until == vu_after_first
+
+
+# ----- CSRF ----------------------------------------------------------------
+
+
+def test_csrf_rejects_missing_token(client: TestClient) -> None:
+    """Form POST without csrf_token on a destructive admin endpoint -> 403."""
+    r = client.post("/admin/login", data={"token": "test-admin"}, follow_redirects=False)
+    cookies = {"asm_ls_session": r.cookies["asm_ls_session"]}
+    r = client.post(
+        "/admin/logout",
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 403
+
+
+def test_csrf_rejects_wrong_token(client: TestClient) -> None:
+    """Wrong CSRF value, even with a valid session cookie -> 403. Pins the
+    same-site-XSS / hostile-subdomain mitigation."""
+    r = client.post("/admin/login", data={"token": "test-admin"}, follow_redirects=False)
+    cookies = {"asm_ls_session": r.cookies["asm_ls_session"]}
+    r = client.post(
+        "/admin/logout",
+        data={"csrf_token": "deadbeef" * 8},
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 403
+
+
+def test_csrf_accepts_correct_token(client: TestClient) -> None:
+    """Sanity: with the right token the destructive POST succeeds."""
+    from app.config import get_settings
+    from app.security import csrf_token
+    r = client.post("/admin/login", data={"token": "test-admin"}, follow_redirects=False)
+    cookies = {"asm_ls_session": r.cookies["asm_ls_session"]}
+    tok = csrf_token(get_settings().session_secret, cookies["asm_ls_session"])
+    r = client.post(
+        "/admin/logout",
+        data={"csrf_token": tok},
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert "/admin/login" in r.headers["location"]

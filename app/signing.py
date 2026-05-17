@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from app.config import get_settings
+from app.keystore import decrypt_pem
 from app.models import Product
 
 
@@ -39,7 +40,9 @@ def sign_license_jwt(
     """Sign a JWT with the product's private key. Returns (jwt, exp_at_utc)."""
     s = get_settings()
     now = datetime.now(UTC)
-    vu = valid_until.replace(tzinfo=UTC) if valid_until.tzinfo is None else valid_until
+    # Naive datetimes from older rows are assumed-UTC (the storage convention);
+    # tz-aware values get converted, never relabeled.
+    vu = valid_until.replace(tzinfo=UTC) if valid_until.tzinfo is None else valid_until.astimezone(UTC)
     cap = min(now + timedelta(days=s.jwt_ttl_days), vu)
     payload = {
         "iss": product.jwt_issuer,
@@ -53,4 +56,7 @@ def sign_license_jwt(
         "features": features,
         "valid_until": int(vu.timestamp()),
     }
-    return jwt.encode(payload, product.private_key_pem, algorithm="EdDSA"), cap
+    # Private key may be stored wrapped (KEK envelope) or as legacy plaintext;
+    # decrypt_pem handles both shapes.
+    private_pem = decrypt_pem(product.private_key_pem)
+    return jwt.encode(payload, private_pem, algorithm="EdDSA"), cap

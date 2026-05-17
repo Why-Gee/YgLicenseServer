@@ -30,6 +30,7 @@ from app import webhooks
 from app.config import get_settings
 from app.db import get_db
 from app.email import send_license_email
+from app.keystore import encrypt_pem
 from app.models import Customer, Event, Install, License, Product
 from app.security import check_admin_bearer, is_safe_url_shape
 from app.signing import generate_keypair, sign_license_jwt
@@ -73,6 +74,34 @@ def _utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def _client_ip_hash(request: Request) -> str | None:
+    """SHA256 of the originating IP. Reads X-Forwarded-For when the request
+    came through a trusted proxy (Caddy in our deploy), falling back to the
+    direct socket peer. Without this every request behind the reverse-proxy
+    hashed `127.0.0.1`, making the column useless for per-tenant install
+    tracking.
+
+    Trust model: we only honor X-Forwarded-For when the immediate peer
+    (request.client.host) is loopback. In our deploy Caddy listens on
+    127.0.0.1 only -- anything from off-box hits Caddy first, gets the
+    XFF header, and reaches us via loopback. Direct hits (impossible in
+    prod) would expose the socket peer.
+    """
+    if request.client is None:
+        return None
+    peer = request.client.host
+    src = peer
+    if peer in ("127.0.0.1", "::1") and "x-forwarded-for" in request.headers:
+        # XFF is a comma-separated list; the LEFTMOST entry is the original
+        # client. Each subsequent proxy appends, so the right side is closer
+        # to us. We strip whitespace and take the first non-empty token.
+        xff = request.headers["x-forwarded-for"]
+        first = next((p.strip() for p in xff.split(",") if p.strip()), None)
+        if first:
+            src = first
+    return hashlib.sha256(src.encode()).hexdigest()
+
+
 @router.post("/v1/check", response_model=CheckOut)
 def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> CheckOut:
     lic = db.query(License).filter_by(key=body.key).one_or_none()
@@ -106,10 +135,7 @@ def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> Che
     if not lic.webhook_secret:
         lic.webhook_secret = webhooks.generate_secret()
 
-    ip_hash = (
-        hashlib.sha256((request.client.host if request.client else "").encode()).hexdigest()
-        if request.client else None
-    )
+    ip_hash = _client_ip_hash(request)
     install = (
         db.query(Install)
         .filter_by(license_id=lic.id, install_id=body.install_id)
@@ -214,7 +240,7 @@ def admin_create_product(body: CreateProductIn, db: Session = Depends(get_db)) -
         name=body.name,
         description=body.description,
         public_key_pem=pub_pem,
-        private_key_pem=priv_pem,
+        private_key_pem=encrypt_pem(priv_pem),
         key_prefix=body.key_prefix,
         stripe_webhook_secret=body.stripe_webhook_secret,
         stripe_api_key=body.stripe_api_key,

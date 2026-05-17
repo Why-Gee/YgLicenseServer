@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import stripe
@@ -43,6 +44,22 @@ router = APIRouter()
 
 def _utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+# Stripe event-type -> handler. Each handler takes (db, product, event) and
+# applies the side effect; missing types are logged and 200'd. Register new
+# types with @stripe_handler("event.name") rather than editing a dispatch chain.
+Handler = Callable[[Session, "Product", dict], None]
+_HANDLERS: dict[str, Handler] = {}
+
+
+def stripe_handler(event_type: str) -> Callable[[Handler], Handler]:
+    def decorate(fn: Handler) -> Handler:
+        if event_type in _HANDLERS:
+            raise RuntimeError(f"duplicate stripe handler for {event_type}")
+        _HANDLERS[event_type] = fn
+        return fn
+    return decorate
 
 
 @router.post("/v1/products/{slug}/stripe-webhook")
@@ -89,20 +106,44 @@ async def stripe_webhook(
             log.info("stripe event %s claimed by concurrent delivery; skipping", event_id)
             return {"received": True, "type": event_type, "product": slug, "duplicate": True}
 
-    obj = event["data"]["object"]
-    customer_id = obj.get("customer")
-
-    if event_type == "invoice.paid":
-        _extend_or_create(db, product=p, customer_id=customer_id, email=obj.get("customer_email"))
-    elif event_type == "invoice.payment_failed":
-        _mark_status(db, product=p, customer_id=customer_id, status="delinquent", note=event_type)
-    elif event_type == "customer.subscription.deleted":
-        _mark_status(db, product=p, customer_id=customer_id, status="revoked", note=event_type)
-    else:
+    handler = _HANDLERS.get(event_type)
+    if handler is None:
         log.info("ignored stripe event for %s: %s", slug, event_type)
+    else:
+        handler(db, p, event)
 
     db.commit()
     return {"received": True, "type": event_type, "product": slug}
+
+
+@stripe_handler("invoice.paid")
+def _on_invoice_paid(db: Session, product: Product, event: dict) -> None:
+    obj = event["data"]["object"]
+    _extend_or_create(
+        db, product=product,
+        customer_id=obj.get("customer"),
+        email=obj.get("customer_email"),
+    )
+
+
+@stripe_handler("invoice.payment_failed")
+def _on_invoice_failed(db: Session, product: Product, event: dict) -> None:
+    obj = event["data"]["object"]
+    _mark_status(
+        db, product=product,
+        customer_id=obj.get("customer"),
+        status="delinquent", note=event["type"],
+    )
+
+
+@stripe_handler("customer.subscription.deleted")
+def _on_subscription_deleted(db: Session, product: Product, event: dict) -> None:
+    obj = event["data"]["object"]
+    _mark_status(
+        db, product=product,
+        customer_id=obj.get("customer"),
+        status="revoked", note=event["type"],
+    )
 
 
 def _extend_or_create(

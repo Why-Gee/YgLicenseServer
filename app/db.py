@@ -11,8 +11,19 @@ from app.models import Base
 
 def _engine():
     s = get_settings()
-    connect_args = {"check_same_thread": False} if s.database_url.startswith("sqlite") else {}
-    return create_engine(s.database_url, connect_args=connect_args, future=True)
+    is_sqlite = s.database_url.startswith("sqlite")
+    connect_args = {"check_same_thread": False} if is_sqlite else {}
+    # pool_pre_ping issues a SELECT 1 on each pooled connection before use,
+    # so long-idle Postgres connections that the server killed don't surface
+    # as InvalidCachedStatementError / OperationalError on the next /v1/check.
+    # Negligible cost vs. one bad request per stale connection. Skipped for
+    # sqlite which doesn't pool.
+    return create_engine(
+        s.database_url,
+        connect_args=connect_args,
+        future=True,
+        pool_pre_ping=not is_sqlite,
+    )
 
 
 _engine_singleton = _engine()

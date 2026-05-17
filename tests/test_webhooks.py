@@ -75,6 +75,23 @@ def _admin_login(client: TestClient) -> dict[str, str]:
     return {"asm_ls_session": r.cookies["asm_ls_session"]}
 
 
+def _csrf_for(cookies: dict[str, str]) -> str:
+    """Re-derive the CSRF token from the session cookie. Mirrors the
+    server-side derivation -- tests don't share state with the server, so
+    they need to compute the same HMAC."""
+    from app.config import get_settings
+    from app.security import csrf_token
+    return csrf_token(get_settings().session_secret, cookies["asm_ls_session"])
+
+
+def _form_post(client: TestClient, url: str, cookies: dict[str, str], data: dict | None = None, **kw):
+    """Auto-injects csrf_token into the form body. Mirrors what a real
+    browser does when the rendered hidden input is submitted."""
+    payload = dict(data or {})
+    payload.setdefault("csrf_token", _csrf_for(cookies))
+    return client.post(url, data=payload, cookies=cookies, **kw)
+
+
 def _create_product(client: TestClient) -> None:
     r = client.post(
         "/v1/admin/products",
@@ -94,6 +111,7 @@ def _issue_via_ui(client: TestClient, *, webhook_url: str = "") -> str:
         "max_users": "10",
         "valid_days": "30",
         "features_json": "{}",
+        "csrf_token": _csrf_for(cookies),
     }
     if webhook_url:
         form["webhook_url"] = webhook_url
@@ -133,7 +151,7 @@ def test_status_change_fires_webhook(client: TestClient, monkeypatch) -> None:
     cookies = _admin_login(client)
 
     with _captured(monkeypatch) as sent:
-        r = client.post(f"/admin/licenses/{lid}/disable", cookies=cookies, follow_redirects=False)
+        r = _form_post(client, f"/admin/licenses/{lid}/disable", cookies, follow_redirects=False)
         assert r.status_code == 303
 
     assert len(sent) == 1
@@ -156,7 +174,7 @@ def test_no_webhook_when_url_unset(client: TestClient, monkeypatch) -> None:
     cookies = _admin_login(client)
 
     with _captured(monkeypatch) as sent:
-        r = client.post(f"/admin/licenses/{lid}/disable", cookies=cookies, follow_redirects=False)
+        r = _form_post(client, f"/admin/licenses/{lid}/disable", cookies, follow_redirects=False)
         assert r.status_code == 303
 
     assert sent == []
@@ -169,7 +187,7 @@ def test_webhook_failure_does_not_break_admin_action(client: TestClient, monkeyp
 
     # Receiver returns 5xx — admin action must still complete.
     with _captured(monkeypatch, status=500):
-        r = client.post(f"/admin/licenses/{lid}/disable", cookies=cookies, follow_redirects=False)
+        r = _form_post(client, f"/admin/licenses/{lid}/disable", cookies, follow_redirects=False)
         assert r.status_code == 303
 
     # Confirm the status actually flipped despite delivery failure.
@@ -188,10 +206,9 @@ def test_delete_fires_license_deleted_webhook(client: TestClient, monkeypatch) -
     # Use the bulk-delete path -- same _delete_license helper that the per-row
     # /delete endpoint (PR #9) calls. Either route fires the webhook.
     with _captured(monkeypatch) as sent:
-        r = client.post(
-            "/admin/products/asm/licenses/delete",
-            data={"license_ids": lid},
-            cookies=cookies, follow_redirects=False,
+        r = _form_post(
+            client, "/admin/products/asm/licenses/delete", cookies,
+            data={"license_ids": lid}, follow_redirects=False,
         )
         assert r.status_code == 303
 
@@ -269,8 +286,9 @@ def test_disable_webhook_callback_sees_disabled_status(
     cookies = _admin_login(client)
 
     with _reentrant_check(monkeypatch, client, key) as cb:
-        r = client.post(
-            f"/admin/licenses/{lid}/disable", cookies=cookies, follow_redirects=False
+        r = _form_post(
+            client, f"/admin/licenses/{lid}/disable", cookies,
+            follow_redirects=False,
         )
         assert r.status_code == 303
 
@@ -293,14 +311,16 @@ def test_enable_webhook_callback_sees_active_status(
 
     # Flip to disabled first; suppress the disable webhook's callback noise.
     with _captured(monkeypatch):
-        client.post(
-            f"/admin/licenses/{lid}/disable", cookies=cookies, follow_redirects=False
+        _form_post(
+            client, f"/admin/licenses/{lid}/disable", cookies,
+            follow_redirects=False,
         )
 
     # Now flip back to active and assert the inside-webhook /v1/check sees it.
     with _reentrant_check(monkeypatch, client, key) as cb:
-        r = client.post(
-            f"/admin/licenses/{lid}/enable", cookies=cookies, follow_redirects=False
+        r = _form_post(
+            client, f"/admin/licenses/{lid}/enable", cookies,
+            follow_redirects=False,
         )
         assert r.status_code == 303
 
@@ -322,8 +342,9 @@ def test_delete_webhook_callback_sees_license_gone(
     cookies = _admin_login(client)
 
     with _reentrant_check(monkeypatch, client, key) as cb:
-        r = client.post(
-            f"/admin/licenses/{lid}/delete", cookies=cookies, follow_redirects=False
+        r = _form_post(
+            client, f"/admin/licenses/{lid}/delete", cookies,
+            follow_redirects=False,
         )
         assert r.status_code == 303
 
@@ -369,10 +390,10 @@ def test_form_webhook_handler_auto_mints_on_first_save(
     assert pre.webhook_url is None
     assert pre.webhook_secret is None
 
-    r = client.post(
-        f"/admin/licenses/{lid}/webhook",
+    r = _form_post(
+        client, f"/admin/licenses/{lid}/webhook", cookies,
         data={"webhook_url": "https://example.test/webhook"},  # no rotate_secret
-        cookies=cookies, follow_redirects=False,
+        follow_redirects=False,
     )
     assert r.status_code == 303, r.text
 
@@ -395,8 +416,8 @@ def test_form_edit_handler_auto_mints_on_first_save(
     assert pre.webhook_secret is None
 
     # /edit takes the full license payload, not just webhook_url.
-    r = client.post(
-        f"/admin/licenses/{lid}/edit",
+    r = _form_post(
+        client, f"/admin/licenses/{lid}/edit", cookies,
         data={
             "plan": pre.plan,
             "max_users": str(pre.max_users),
@@ -405,7 +426,7 @@ def test_form_edit_handler_auto_mints_on_first_save(
             "webhook_url": "https://example.test/webhook",
             # rotate_secret intentionally omitted
         },
-        cookies=cookies, follow_redirects=False,
+        follow_redirects=False,
     )
     assert r.status_code == 303, r.text
     # Server flagged secret_changed -> redirect with ?webhook_lid so the
@@ -430,10 +451,10 @@ def test_form_webhook_handler_no_mint_when_url_unchanged_and_no_rotate(
     cookies = _admin_login(client)
     sec1 = _read_license(lid).webhook_secret
 
-    r = client.post(
-        f"/admin/licenses/{lid}/webhook",
+    r = _form_post(
+        client, f"/admin/licenses/{lid}/webhook", cookies,
         data={"webhook_url": "https://example.test/webhook"},
-        cookies=cookies, follow_redirects=False,
+        follow_redirects=False,
     )
     assert r.status_code == 303
     assert _read_license(lid).webhook_secret == sec1
@@ -445,7 +466,7 @@ def test_signature_verifies_with_secret_in_db(client: TestClient, monkeypatch) -
     cookies = _admin_login(client)
 
     with _captured(monkeypatch) as sent:
-        client.post(f"/admin/licenses/{lid}/disable", cookies=cookies, follow_redirects=False)
+        _form_post(client, f"/admin/licenses/{lid}/disable", cookies, follow_redirects=False)
     msg = sent[0]
     sig_header = msg["headers"]["x-license-server-signature"]
     parts = dict(p.split("=", 1) for p in sig_header.split(","))
@@ -487,10 +508,10 @@ def test_webhook_update_banner_renders_inside_modal(client: TestClient) -> None:
     lid = _issue_via_ui(client)
     cookies = _admin_login(client)
 
-    r = client.post(
-        f"/admin/licenses/{lid}/webhook",
+    r = _form_post(
+        client, f"/admin/licenses/{lid}/webhook", cookies,
         data={"webhook_url": "https://example.test/webhook"},
-        cookies=cookies, follow_redirects=True,
+        follow_redirects=True,
     )
     assert r.status_code == 200
     _assert_in_modal(r.content, b"webhook configuration updated")
@@ -504,9 +525,9 @@ def test_webhook_test_ok_banner_renders_inside_modal(
     cookies = _admin_login(client)
 
     with _captured(monkeypatch, status=200):
-        r = client.post(
-            f"/admin/licenses/{lid}/webhook/test",
-            cookies=cookies, follow_redirects=True,
+        r = _form_post(
+            client, f"/admin/licenses/{lid}/webhook/test", cookies,
+            follow_redirects=True,
         )
     assert r.status_code == 200
     _assert_in_modal(r.content, b"test webhook delivered (HTTP 200)")
@@ -520,9 +541,9 @@ def test_webhook_test_failure_banner_renders_inside_modal(
     cookies = _admin_login(client)
 
     with _captured(monkeypatch, status=500):
-        r = client.post(
-            f"/admin/licenses/{lid}/webhook/test",
-            cookies=cookies, follow_redirects=True,
+        r = _form_post(
+            client, f"/admin/licenses/{lid}/webhook/test", cookies,
+            follow_redirects=True,
         )
     assert r.status_code == 200
     _assert_in_modal(r.content, b"test webhook failed")
@@ -534,15 +555,15 @@ def test_edited_banner_renders_inside_modal(client: TestClient) -> None:
     cookies = _admin_login(client)
     pre = _read_license(lid)
 
-    r = client.post(
-        f"/admin/licenses/{lid}/edit",
+    r = _form_post(
+        client, f"/admin/licenses/{lid}/edit", cookies,
         data={
             "plan": pre.plan,
             "max_users": str(pre.max_users),
             "valid_until": pre.valid_until.strftime("%Y-%m-%d"),
             "features_json": "{}",
         },
-        cookies=cookies, follow_redirects=True,
+        follow_redirects=True,
     )
     assert r.status_code == 200
     _assert_in_modal(r.content, b"license updated")

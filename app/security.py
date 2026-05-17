@@ -5,6 +5,7 @@ Defensive primitives that should not live in any single route handler:
 - constant-time bearer-token check (admin auth across both JSON + form paths)
 - outbound-URL safety check (SSRF guard for /v1/check's self-registered
   public_url AND for admin-supplied webhook URLs)
+- CSRF token derived deterministically from the admin session cookie
 
 Two-tier SSRF model:
 - `is_safe_url_shape()` is cheap, no DNS. Used at ingestion time to reject
@@ -16,6 +17,7 @@ Two-tier SSRF model:
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import ipaddress
 import logging
@@ -38,6 +40,32 @@ _FORBIDDEN_HOST_SUFFIXES = (
     ".home",
     ".private",
 )
+
+
+def csrf_token(session_secret: str, session_cookie: str) -> str:
+    """Deterministic CSRF token tied to a specific session cookie.
+
+    Derived as HMAC(session_secret, "csrf:" + session_cookie). Doesn't need
+    server-side state -- the next request can re-derive the expected value
+    from its own cookie. Rotating the cookie (new login) rotates the token;
+    SameSite=Lax + this check together cover the same-site CSRF gap that
+    SameSite alone leaves.
+    """
+    msg = b"csrf:" + session_cookie.encode("utf-8", "replace")
+    return hmac.new(session_secret.encode(), msg, hashlib.sha256).hexdigest()
+
+
+def check_csrf(session_secret: str, session_cookie: str, supplied: str | None) -> bool:
+    """Const-time compare of a supplied CSRF token against the expected one."""
+    if not supplied:
+        return False
+    expected = csrf_token(session_secret, session_cookie)
+    a = expected.encode()
+    b = supplied.encode()
+    if len(a) != len(b):
+        hmac.compare_digest(a, a)
+        return False
+    return hmac.compare_digest(a, b)
 
 
 def check_admin_bearer(authorization: str | None, admin_token: str) -> bool:

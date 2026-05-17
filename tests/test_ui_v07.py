@@ -39,6 +39,12 @@ def _login(client: TestClient) -> dict[str, str]:
     return {"asm_ls_session": r.cookies["asm_ls_session"]}
 
 
+def _csrf(cookies: dict[str, str]) -> str:
+    from app.config import get_settings
+    from app.security import csrf_token
+    return csrf_token(get_settings().session_secret, cookies["asm_ls_session"])
+
+
 def _create_product(client: TestClient, slug: str = "asm") -> None:
     r = client.post(
         "/v1/admin/products",
@@ -147,7 +153,10 @@ def test_customer_edit_updates_fields(client: TestClient) -> None:
 
     r = client.post(
         f"/admin/customers/{cid}/edit",
-        data={"name": "Acme", "email": "new@example.com", "stripe_customer_id": "cus_123"},
+        data={
+            "name": "Acme", "email": "new@example.com",
+            "stripe_customer_id": "cus_123", "csrf_token": _csrf(cookies),
+        },
         cookies=cookies, follow_redirects=False,
     )
     assert r.status_code == 303, r.text
@@ -174,7 +183,10 @@ def test_customer_edit_rejects_email_collision(client: TestClient) -> None:
 
     r = client.post(
         f"/admin/customers/{cid_a}/edit",
-        data={"name": "", "email": "b@example.com", "stripe_customer_id": ""},
+        data={
+            "name": "", "email": "b@example.com",
+            "stripe_customer_id": "", "csrf_token": _csrf(cookies),
+        },
         cookies=cookies, follow_redirects=False,
     )
     assert r.status_code == 303
