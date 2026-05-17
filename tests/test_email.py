@@ -1,7 +1,6 @@
 """Email-on-issue tests with mocked Resend HTTP transport."""
 from __future__ import annotations
 
-import importlib
 import json
 from contextlib import contextmanager
 
@@ -41,29 +40,8 @@ def _captured(monkeypatch, status: int = 200):
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch) -> TestClient:
-    db_path = tmp_path / "license.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
-    monkeypatch.setenv("ADMIN_TOKEN", "test-admin")
-    monkeypatch.setenv("SESSION_SECRET", "test-admin")
-    monkeypatch.setenv("COOKIE_SECURE", "false")
-    monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
-    monkeypatch.setenv("EMAIL_FROM", "onboarding@resend.dev")
-
-    import app.config as cfg
-    import app.db as db
-    importlib.reload(cfg)
-    importlib.reload(db)
-    import app.email as em
-    importlib.reload(em)
-    import app.api as api_mod
-    importlib.reload(api_mod)
-    import app.stripe_webhook as sw
-    importlib.reload(sw)
-    import app.main as m
-    importlib.reload(m)
-    db.init_db()
-    return TestClient(m.app)
+def client(make_client) -> TestClient:
+    return make_client(RESEND_API_KEY="re_test_key", EMAIL_FROM="onboarding@resend.dev")
 
 
 def _create_product(client: TestClient) -> dict:
@@ -100,27 +78,8 @@ def test_admin_issue_sends_email(client: TestClient, monkeypatch) -> None:
     assert msg["body"]["from"] == "Animal Shelter Manager <onboarding@resend.dev>"
 
 
-def test_email_skipped_when_unconfigured(tmp_path, monkeypatch) -> None:
-    db_path = tmp_path / "license.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
-    monkeypatch.setenv("ADMIN_TOKEN", "test-admin")
-    monkeypatch.setenv("SESSION_SECRET", "test-admin")
-    monkeypatch.setenv("COOKIE_SECURE", "false")
-    monkeypatch.delenv("RESEND_API_KEY", raising=False)
-
-    import app.config as cfg
-    import app.db as db
-    importlib.reload(cfg)
-    importlib.reload(db)
-    import app.email as em
-    importlib.reload(em)
-    import app.api as api_mod
-    importlib.reload(api_mod)
-    import app.main as m
-    importlib.reload(m)
-    db.init_db()
-    c = TestClient(m.app)
-
+def test_email_skipped_when_unconfigured(make_client, monkeypatch) -> None:
+    c = make_client()  # default conftest env: no RESEND_API_KEY
     c.post(
         "/v1/admin/products",
         headers={"Authorization": "Bearer test-admin"},

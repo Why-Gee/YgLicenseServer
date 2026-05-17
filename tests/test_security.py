@@ -108,7 +108,13 @@ def test_admin_bearer_rejects_missing_prefix(client: TestClient) -> None:
 
 def test_session_cookie_expires_after_max_age(client: TestClient) -> None:
     """Forge an old-iat cookie -> _logged_in returns False -> redirect."""
-    from app.admin_ui import SESSION_COOKIE, SESSION_MAX_AGE_SECONDS, _serializer
+    from app.routers.admin_ui._deps import (
+        SESSION_COOKIE,
+        SESSION_MAX_AGE_SECONDS,
+    )
+    from app.routers.admin_ui._deps import (
+        serializer as _serializer,
+    )
     old_iat = int(time.time()) - (SESSION_MAX_AGE_SECONDS + 60)
     cookie = _serializer().dumps({"ok": True, "iat": old_iat})
     r = client.get(
@@ -123,7 +129,8 @@ def test_session_cookie_expires_after_max_age(client: TestClient) -> None:
 def test_session_cookie_without_iat_rejected(client: TestClient) -> None:
     """Cookies issued by pre-fix code had no iat -> must be rejected so an
     attacker can't replay them indefinitely."""
-    from app.admin_ui import SESSION_COOKIE, _serializer
+    from app.routers.admin_ui._deps import SESSION_COOKIE
+    from app.routers.admin_ui._deps import serializer as _serializer
     cookie = _serializer().dumps({"ok": True})  # no iat
     r = client.get(
         "/admin",
