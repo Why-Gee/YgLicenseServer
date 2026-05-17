@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import importlib
 from datetime import UTC
+from pathlib import Path
 
 import pytest
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 
 from alembic import command
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
@@ -34,12 +37,8 @@ def upgraded_db_url(tmp_path, monkeypatch) -> str:
     import app.config as cfg
     importlib.reload(cfg)
 
-    cfg_path = "L:/Work/Programming/Licenses/LicenseServer/alembic.ini"
-    alembic_cfg = Config(cfg_path)
-    alembic_cfg.set_main_option(
-        "script_location",
-        "L:/Work/Programming/Licenses/LicenseServer/alembic",
-    )
+    alembic_cfg = Config(str(REPO_ROOT / "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     command.upgrade(alembic_cfg, "head")
     return url
 
