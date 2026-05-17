@@ -28,8 +28,9 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.models import Customer, License
+from app.models import License
 from app.security import check_admin_bearer
+from app.services import customers as customers_svc
 from app.services import licenses as licenses_svc
 from app.services import products as products_svc
 from app.services.check import CheckRejected, check_license
@@ -181,16 +182,17 @@ def admin_create_product(body: CreateProductIn, db: Session = Depends(get_db)) -
 
 @router.get("/v1/admin/products", dependencies=[Depends(_require_admin)])
 def admin_list_products(db: Session = Depends(get_db)) -> list[dict]:
+    # Single aggregate query instead of N+1 lazy-loads on `p.licenses`.
     return [
         {
             "id": p.id,
             "slug": p.slug,
             "name": p.name,
             "key_prefix": p.key_prefix,
-            "license_count": len(p.licenses),
+            "license_count": n,
             "created_at": p.created_at.isoformat(),
         }
-        for p in products_svc.list_products(db)
+        for p, n in products_svc.list_products_with_counts(db)
     ]
 
 
@@ -209,7 +211,7 @@ def admin_get_product(slug: str, db: Session = Depends(get_db)) -> dict:
         "jwt_issuer": p.jwt_issuer,
         "public_key_pem": p.public_key_pem,
         "stripe_webhook_configured": bool(p.stripe_webhook_secret),
-        "license_count": len(p.licenses),
+        "license_count": products_svc.license_count(db, p.id),
         "created_at": p.created_at.isoformat(),
     }
 
@@ -257,28 +259,43 @@ def admin_issue(slug: str, body: IssueIn, db: Session = Depends(get_db)) -> Issu
 
 
 @router.get("/v1/admin/products/{slug}/licenses", dependencies=[Depends(_require_admin)])
-def admin_list_licenses(slug: str, limit: int = 200, db: Session = Depends(get_db)) -> list[dict]:
+def admin_list_licenses(
+    slug: str,
+    cursor: str | None = None,
+    limit: int | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Cursor-paginated. Pass the previous response's `next_cursor` back as
+    `?cursor=` to fetch the next page; `next_cursor` is null at end-of-set.
+    `?limit=` clamps to [1, 500]; defaults to 100. Records ship in created_at
+    desc order (newest first)."""
+    from app.pagination import clamp_limit, paginate
     try:
         p = products_svc.get_product(db, slug)
     except NotFound as e:
         raise HTTPException(status_code=404, detail="product not found") from e
-    rows = (
+    base = (
         db.query(License)
         .filter_by(product_id=p.id)
-        .order_by(License.created_at.desc())
-        .limit(limit)
-        .all()
+        .order_by(License.created_at.desc(), License.id.desc())
     )
-    return [
-        {
-            "id": r.id, "key": r.key, "plan": r.plan, "status": r.status,
-            "max_users": r.max_users, "features": r.features,
-            "valid_until": r.valid_until.isoformat(),
-            "customer": r.customer.email, "customer_name": r.customer.name,
-            "created_at": r.created_at.isoformat(),
-        }
-        for r in rows
-    ]
+    page = paginate(
+        base, cursor_col=(License.created_at, License.id),
+        cursor=cursor, limit=clamp_limit(limit),
+    )
+    return {
+        "items": [
+            {
+                "id": r.id, "key": r.key, "plan": r.plan, "status": r.status,
+                "max_users": r.max_users, "features": r.features,
+                "valid_until": r.valid_until.isoformat(),
+                "customer": r.customer.email, "customer_name": r.customer.name,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in page.items
+        ],
+        "next_cursor": page.next_cursor,
+    }
 
 
 @router.post("/v1/admin/licenses/{lid}/revoke", dependencies=[Depends(_require_admin)])
@@ -294,13 +311,28 @@ def admin_revoke(lid: str, db: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/v1/admin/customers", dependencies=[Depends(_require_admin)])
-def admin_customers(db: Session = Depends(get_db)) -> list[dict]:
-    return [
-        {
-            "id": c.id, "email": c.email, "name": c.name,
-            "stripe_customer_id": c.stripe_customer_id,
-            "license_count": len(c.licenses),
-            "created_at": c.created_at.isoformat(),
-        }
-        for c in db.query(Customer).order_by(Customer.created_at.desc()).all()
-    ]
+def admin_customers(
+    cursor: str | None = None,
+    limit: int | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Cursor-paginated. Pass the previous response's `next_cursor` back as
+    `?cursor=` to fetch the next page; `next_cursor` is null at end-of-set.
+    `?limit=` clamps to [1, 500]; defaults to 100."""
+    from app.pagination import clamp_limit
+    eff_limit = clamp_limit(limit)
+    items, next_cursor = customers_svc.page_customers_with_counts(
+        db, cursor=cursor, limit=eff_limit,
+    )
+    return {
+        "items": [
+            {
+                "id": c.id, "email": c.email, "name": c.name,
+                "stripe_customer_id": c.stripe_customer_id,
+                "license_count": n,
+                "created_at": c.created_at.isoformat(),
+            }
+            for c, n in items
+        ],
+        "next_cursor": next_cursor,
+    }

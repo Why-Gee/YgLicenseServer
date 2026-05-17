@@ -142,6 +142,11 @@
   {% else %}
   <p class="muted">no licenses issued yet — click <strong>+ Issue License</strong> above.</p>
   {% endif %}
+  {% if next_cursor %}
+  <p style="margin-top:1em;">
+    <a class="btn" href="/admin/products/{{ product.slug }}?cursor={{ next_cursor }}">Next →</a>
+  </p>
+  {% endif %}
 </div>
 
 {# Per-license JSON payload consumed by the modal JS to populate edit mode.
@@ -215,6 +220,10 @@
       <div id="lm-customer-name-row" style="grid-column:1/-1;">
         <label>Customer Name <span class="muted" style="font-weight:normal;font-size:.85em;">(optional)</span></label>
         <input id="lm-customer-name" name="customer_name" type="text" placeholder="e.g. Acme Animal Shelter">
+        <small id="lm-customer-name-hint" class="muted" style="display:none;margin-top:.3em;">
+          Customer renames live on the
+          <a id="lm-customer-link" href="/admin/customers">Customers page</a> — a customer can own licenses for multiple products, so the rename belongs there, not here.
+        </small>
       </div>
       <div><label>Plan</label><input id="lm-plan" name="plan" required></div>
       <div><label>Max Users</label><input id="lm-max-users" name="max_users" type="number" min="1" required></div>
@@ -288,6 +297,8 @@
   var emailRow = document.getElementById('lm-email-row');
   var emailIn = document.getElementById('lm-email');
   var nameIn = document.getElementById('lm-customer-name');
+  var nameHint = document.getElementById('lm-customer-name-hint');
+  var customerLink = document.getElementById('lm-customer-link');
   var keyRow = document.getElementById('lm-key-row');
   var keyEl = document.getElementById('lm-key');
   var planIn = document.getElementById('lm-plan');
@@ -424,7 +435,16 @@
       emailIn.removeAttribute('required');
       keyRow.style.display = '';
       keyEl.textContent = lic.key + '\n\n' + lic.email;
+      // Edit mode: customer name is read-only. The license-edit endpoint
+      // doesn't accept this field anymore (renaming a tenant-wide Customer
+      // from a license form would silently rename them on every other
+      // product). Strip `name` so the field doesn't post; hint links to the
+      // dedicated Customers page where the rename belongs.
       nameIn.value = lic.customer_name || '';
+      nameIn.setAttribute('readonly', '');
+      nameIn.removeAttribute('name');
+      if (nameHint) nameHint.style.display = '';
+      if (customerLink) customerLink.href = '/admin/customers?lookup=' + encodeURIComponent(lic.email);
       planIn.value = lic.plan;
       maxIn.value = lic.max_users;
       validDaysWrap.style.display = 'none';
@@ -469,6 +489,9 @@
       emailIn.setAttribute('required', '');
       emailIn.value = '';
       nameIn.value = '';
+      nameIn.removeAttribute('readonly');
+      nameIn.setAttribute('name', 'customer_name');
+      if (nameHint) nameHint.style.display = 'none';
       keyRow.style.display = 'none';
       keyEl.textContent = '';
       planIn.value = 'standard';

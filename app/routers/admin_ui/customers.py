@@ -6,7 +6,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Customer
 from app.routers.admin_ui._deps import err_code, require_csrf, require_login, templates
 from app.services import customers as customers_svc
 from app.services.errors import Conflict, NotFound, ValidationFailed
@@ -15,19 +14,31 @@ router = APIRouter()
 
 
 @router.get("/admin/customers", response_class=HTMLResponse)
-def customers_list(request: Request, db: Session = Depends(get_db)) -> Response:
+def customers_list(
+    request: Request,
+    cursor: str | None = None,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Cursor-paginated. `?cursor=<token>` advances; the template renders a
+    Next link when there's more. Page size is fixed at DEFAULT_LIMIT so the
+    URL stays clean (the JSON API endpoint exposes `?limit=` for callers
+    that need per-page control)."""
     require_login(request)
-    rows = db.query(Customer).order_by(Customer.created_at.desc()).all()
-    # Per-customer product slugs derived from their licenses. Distinct + sorted
-    # so the column reads deterministically and sortable-header text sort
-    # works as expected.
-    products_by_customer: dict[str, list[str]] = {
-        c.id: sorted({lic.product.slug for lic in c.licenses if lic.product})
-        for c in rows
-    }
+    from app.pagination import DEFAULT_LIMIT
+    triples, next_cursor = customers_svc.list_customers_with_product_slugs(
+        db, cursor=cursor, limit=DEFAULT_LIMIT,
+    )
+    rows = [c for c, _, _ in triples]
+    license_counts = {c.id: n for c, n, _ in triples}
+    products_by_customer = {c.id: slugs for c, _, slugs in triples}
     return templates.TemplateResponse(
         request, "customers.html",
-        {"customers": rows, "products_by_customer": products_by_customer},
+        {
+            "customers": rows,
+            "products_by_customer": products_by_customer,
+            "license_counts": license_counts,
+            "next_cursor": next_cursor,
+        },
     )
 
 

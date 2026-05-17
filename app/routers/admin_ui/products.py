@@ -17,10 +17,18 @@ router = APIRouter()
 
 @router.get("/admin/products", response_class=HTMLResponse)
 def products_list(request: Request, db: Session = Depends(get_db)) -> Response:
-    """Full products listing — moved out of the dashboard in v0.7.1."""
+    """Full products listing — moved out of the dashboard in v0.7.1.
+
+    Counts are joined in a single aggregate query (not derived from
+    `p.licenses` in the template, which would trip N+1 lazy-loads)."""
     require_login(request)
-    products = products_svc.list_products(db)
-    return templates.TemplateResponse(request, "products.html", {"products": products})
+    pairs = products_svc.list_products_with_counts(db)
+    products = [p for p, _ in pairs]
+    license_counts = {p.id: n for p, n in pairs}
+    return templates.TemplateResponse(
+        request, "products.html",
+        {"products": products, "license_counts": license_counts},
+    )
 
 
 @router.get("/admin/products/new", response_class=HTMLResponse)
@@ -65,7 +73,7 @@ def product_delete_one(
     require_login(request)
     require_csrf(request, csrf_token)
     try:
-        result = products_svc.delete_product(db, slug)
+        result = products_svc.delete_product(db, slug, schedule=bg.add_task)
     except NotFound as e:
         raise HTTPException(status_code=404) from e
     return RedirectResponse(
@@ -86,11 +94,15 @@ def products_bulk_delete(
     require_csrf(request, csrf_token)
     if not product_slugs:
         return RedirectResponse("/admin?error=no+products+selected", status_code=303)
+    # Per-product is its own transaction (each delete_product commits once).
+    # Cross-product bulk is rare and a same-tx batch would hold locks on all
+    # licenses of every selected product simultaneously, so we keep these
+    # independent. NotFound skips that one slug without aborting the rest.
     deleted_products = 0
     deleted_licenses = 0
     for slug in product_slugs:
         try:
-            result = products_svc.delete_product(db, slug)
+            result = products_svc.delete_product(db, slug, schedule=bg.add_task)
         except NotFound:
             continue
         deleted_licenses += result.license_count
@@ -102,22 +114,34 @@ def products_bulk_delete(
 
 
 @router.get("/admin/products/{slug}", response_class=HTMLResponse)
-def product_detail(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
+def product_detail(
+    slug: str,
+    request: Request,
+    cursor: str | None = None,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Cursor-paginated license list. Page size fixed at DEFAULT_LIMIT; if
+    the product has more licenses than that, the template renders a Next
+    link. The previous 200-row hard cap silently dropped any older rows --
+    cursor pagination exposes them properly."""
     require_login(request)
+    from app.pagination import DEFAULT_LIMIT, paginate
     try:
         p = products_svc.get_product(db, slug)
     except NotFound as e:
         raise HTTPException(status_code=404) from e
-    licenses = (
+    base = (
         db.query(License)
         .filter_by(product_id=p.id)
-        .order_by(License.created_at.desc())
-        .limit(200)
-        .all()
+        .order_by(License.created_at.desc(), License.id.desc())
+    )
+    page = paginate(
+        base, cursor_col=(License.created_at, License.id),
+        cursor=cursor, limit=DEFAULT_LIMIT,
     )
     return templates.TemplateResponse(
         request, "product_detail.html",
-        {"product": p, "licenses": licenses},
+        {"product": p, "licenses": page.items, "next_cursor": page.next_cursor},
     )
 
 

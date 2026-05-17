@@ -79,9 +79,12 @@ def test_issue_form_blank_name_stays_null(client: TestClient) -> None:
     assert _read_customer_name_by_email("buyer@example.com") is None
 
 
-def test_issue_form_overwrites_existing_name_when_supplied(client: TestClient) -> None:
-    """Re-issuing for the same email with a non-empty name updates the
-    existing customer row. Empty name leaves it alone (separate test)."""
+def test_issue_form_ignores_name_for_existing_customer(client: TestClient) -> None:
+    """A Customer is tenant-wide (one row per email across all products on
+    this server). Re-issuing for an existing email MUST NOT silently rename
+    the customer -- otherwise issuing a license for Product B would clobber
+    the name set during issuance for Product A. Rename via
+    /admin/customers/{id}/edit instead."""
     _create_product(client)
     cookies = _login(client)
     base = {
@@ -99,7 +102,8 @@ def test_issue_form_overwrites_existing_name_when_supplied(client: TestClient) -
         data={**base, "customer_name": "Updated Name"},
         cookies=cookies, follow_redirects=False,
     )
-    assert _read_customer_name_by_email("buyer@example.com") == "Updated Name"
+    # Name from the SECOND issue is ignored -- customer already existed.
+    assert _read_customer_name_by_email("buyer@example.com") == "Initial Name"
 
 
 def test_issue_form_blank_name_does_not_wipe_existing(client: TestClient) -> None:
@@ -124,9 +128,10 @@ def test_issue_form_blank_name_does_not_wipe_existing(client: TestClient) -> Non
     assert _read_customer_name_by_email("buyer@example.com") == "Keep Me"
 
 
-def test_edit_form_updates_customer_name(client: TestClient) -> None:
-    """The edit modal exposes Customer Name as an editable field;
-    submitting overwrites (empty clears, non-empty replaces)."""
+def test_edit_form_ignores_customer_name_field(client: TestClient) -> None:
+    """License-edit must NOT mutate the linked Customer's name even if the
+    form payload includes one (e.g. crafted directly, or from a stale modal).
+    The Customer rename lives at /admin/customers/{id}/edit."""
     _create_product(client)
     cookies = _login(client)
     r = client.post(
@@ -141,7 +146,6 @@ def test_edit_form_updates_customer_name(client: TestClient) -> None:
     )
     lid = r.headers["location"].rsplit("issued=", 1)[1]
 
-    # Pull the license to get its current valid_until for the edit payload.
     import app.db as db_mod
     from app.models import License
     with db_mod.SessionLocal() as session:
@@ -149,33 +153,53 @@ def test_edit_form_updates_customer_name(client: TestClient) -> None:
         valid_until_str = lic.valid_until.strftime("%Y-%m-%d")
         plan, max_users = lic.plan, lic.max_users
 
-    # Rename via /edit.
+    # Even if a crafted POST includes customer_name, /edit ignores it.
     r = client.post(
         f"/admin/licenses/{lid}/edit",
         data={
             "plan": plan, "max_users": str(max_users),
             "valid_until": valid_until_str, "features_json": "{}",
-            "customer_name": "Renamed Customer",
+            "customer_name": "Hijacked Name",
             "csrf_token": _csrf(cookies),
         },
         cookies=cookies, follow_redirects=False,
     )
     assert r.status_code == 303
-    assert _read_customer_name_by_email("buyer@example.com") == "Renamed Customer"
+    assert _read_customer_name_by_email("buyer@example.com") == "Original"
 
-    # Clear via blank submission.
+
+def test_customer_edit_route_renames(client: TestClient) -> None:
+    """The proper rename path: POST /admin/customers/{id}/edit with name."""
+    _create_product(client)
+    cookies = _login(client)
+    client.post(
+        "/admin/products/asm/licenses",
+        data=_issue_form(
+            cookies,
+            email="buyer@example.com", customer_name="Original",
+            plan="standard", max_users="10", valid_days="30",
+            features_json="{}",
+        ),
+        cookies=cookies, follow_redirects=False,
+    )
+
+    import app.db as db_mod
+    from app.models import Customer
+    with db_mod.SessionLocal() as s:
+        cid = s.query(Customer).filter_by(email="buyer@example.com").one().id
+
     r = client.post(
-        f"/admin/licenses/{lid}/edit",
+        f"/admin/customers/{cid}/edit",
         data={
-            "plan": plan, "max_users": str(max_users),
-            "valid_until": valid_until_str, "features_json": "{}",
-            "customer_name": "",
+            "email": "buyer@example.com",
+            "name": "Properly Renamed",
+            "stripe_customer_id": "",
             "csrf_token": _csrf(cookies),
         },
         cookies=cookies, follow_redirects=False,
     )
-    assert r.status_code == 303
-    assert _read_customer_name_by_email("buyer@example.com") is None
+    assert r.status_code == 303, r.text
+    assert _read_customer_name_by_email("buyer@example.com") == "Properly Renamed"
 
 
 def test_product_detail_renders_name_column_and_modal_field(client: TestClient) -> None:
@@ -229,7 +253,9 @@ def test_admin_list_licenses_includes_customer_name(client: TestClient) -> None:
         headers={"Authorization": "Bearer test-admin"},
     )
     assert r.status_code == 200
-    rows = r.json()
+    body = r.json()
+    rows = body["items"]
+    assert body["next_cursor"] is None
     assert len(rows) == 1
     assert rows[0]["customer"] == "buyer@example.com"
     assert rows[0]["customer_name"] == "Acme"
@@ -256,7 +282,9 @@ def test_v1_admin_issue_persists_name(client: TestClient) -> None:
         headers={"Authorization": "Bearer test-admin"},
     )
     assert r.status_code == 200
-    rows = r.json()
+    body = r.json()
+    rows = body["items"]
+    assert body["next_cursor"] is None
     assert len(rows) == 1
     assert rows[0]["email"] == "api@example.com"
     assert rows[0]["name"] == "Via API"

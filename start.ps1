@@ -110,7 +110,11 @@ try {
     }
 
     if ([string]::IsNullOrWhiteSpace($env:SESSION_SECRET)) {
-        $warnings += "SESSION_SECRET is not set. Falling back to ADMIN_TOKEN -- fine for dev, set a distinct value for prod."
+        $errors += "SESSION_SECRET is not set in $envPath. Add SESSION_SECRET=<value> -- generate via:`n" +
+                   "  python -c `"import secrets; print(secrets.token_urlsafe(32))`"`n" +
+                   "Note: SESSION_SECRET must be distinct from ADMIN_TOKEN (no fallback)."
+    } elseif ($env:SESSION_SECRET -eq $env:ADMIN_TOKEN) {
+        $errors += "SESSION_SECRET must be a distinct value from ADMIN_TOKEN. Regenerate one."
     }
 
     # COOKIE_SECURE=true (default) makes the admin session cookie HTTPS-only.

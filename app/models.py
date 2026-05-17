@@ -65,8 +65,11 @@ class Product(Base):
 
     # Optional per-product Stripe/Paddle webhook secret. The webhook endpoint
     # is product-scoped: /v1/products/<slug>/stripe-webhook.
-    stripe_webhook_secret: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    stripe_api_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Stored encrypted under the same KEK as `private_key_pem` (see
+    # app.keystore). Column type is Text so the ciphertext (Fernet token,
+    # ~100B beyond the plaintext) fits. Access through app.keystore.decrypt_secret.
+    stripe_webhook_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stripe_api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # JWT issuer claim for tokens minted on behalf of this product.
     jwt_issuer: Mapped[str] = mapped_column(String(64))

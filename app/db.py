@@ -18,12 +18,18 @@ def _engine():
     # as InvalidCachedStatementError / OperationalError on the next /v1/check.
     # Negligible cost vs. one bad request per stale connection. Skipped for
     # sqlite which doesn't pool.
-    return create_engine(
-        s.database_url,
-        connect_args=connect_args,
-        future=True,
-        pool_pre_ping=not is_sqlite,
-    )
+    kwargs: dict = {
+        "connect_args": connect_args,
+        "future": True,
+        "pool_pre_ping": not is_sqlite,
+    }
+    if not is_sqlite:
+        # Postgres only: tune QueuePool. SQLite uses SingletonThreadPool /
+        # NullPool and ignores these args -- passing them would warn.
+        kwargs["pool_size"] = s.db_pool_size
+        kwargs["max_overflow"] = s.db_max_overflow
+        kwargs["pool_recycle"] = s.db_pool_recycle
+    return create_engine(s.database_url, **kwargs)
 
 
 _engine_singleton = _engine()

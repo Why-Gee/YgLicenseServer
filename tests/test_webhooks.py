@@ -167,8 +167,58 @@ def test_webhook_failure_does_not_break_admin_action(client: TestClient, monkeyp
     listing = client.get(
         "/v1/admin/products/asm/licenses",
         headers={"Authorization": "Bearer test-admin"},
-    ).json()
+    ).json()["items"]
     assert listing[0]["status"] == "disabled"
+
+
+def test_bulk_delete_is_atomic_and_fires_one_webhook_per_license(
+    client: TestClient, monkeypatch
+) -> None:
+    """N licenses bulk-deleted in a single POST -> N rows gone from the DB
+    AND N webhooks fired, in one transaction. Proves the new atomic-bulk
+    helper batches the commits."""
+    _create_product(client)
+    cookies = _admin_login(client)
+    # Issue three licenses, each with a webhook URL.
+    lids: list[str] = []
+    for i in range(3):
+        form = {
+            "email": f"buyer{i}@example.test",
+            "plan": "standard", "max_users": "10", "valid_days": "30",
+            "features_json": "{}",
+            "webhook_url": f"https://example.test/hook/{i}",
+            "csrf_token": _csrf_for(cookies),
+        }
+        r = client.post(
+            "/admin/products/asm/licenses",
+            data=form, cookies=cookies, follow_redirects=False,
+        )
+        assert r.status_code == 303
+        lids.append(r.headers["location"].rsplit("issued=", 1)[1])
+
+    # Bulk-delete all three. httpx encodes a dict with a list value as
+    # repeated form fields (license_ids=...&license_ids=...&...).
+    payload = {"license_ids": lids, "csrf_token": _csrf_for(cookies)}
+    with _captured(monkeypatch) as sent:
+        r = client.post(
+            "/admin/products/asm/licenses/delete",
+            data=payload, cookies=cookies, follow_redirects=False,
+        )
+        assert r.status_code == 303, r.text
+        assert "deleted=3" in r.headers["location"]
+
+    # One webhook per deleted license -- and each is the license.deleted event.
+    assert len(sent) == 3
+    types = {json.loads(s["body"])["type"] for s in sent}
+    assert types == {"license.deleted"}
+
+    # All three rows are actually gone.
+    listing = client.get(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+    ).json()
+    assert listing["items"] == []
+    assert listing["next_cursor"] is None
 
 
 def test_delete_fires_license_deleted_webhook(client: TestClient, monkeypatch) -> None:
