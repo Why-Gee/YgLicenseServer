@@ -3,11 +3,20 @@ Description=YgLicenseServer (Docker)
 After=docker.service network-online.target
 Requires=docker.service
 Wants=network-online.target
+# Bound restart attempts. Restart=always re-launches on any non-clean exit,
+# including a permanent config error (e.g. corrupted env file) — without a
+# burst limit that's a restart loop forever, masking the failure in logs.
+# 5 restarts inside 5 minutes -> systemd gives up and surfaces "failed".
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
-Restart=always
+Restart=on-failure
 RestartSec=5
+# Cap how long `docker pull` can hang before systemd considers boot wedged.
+# Slow registry or DNS would otherwise block multi-user.target indefinitely.
+TimeoutStartSec=180
 EnvironmentFile=/etc/yg-license-server/yg-license-server.env
 ExecStartPre=-/usr/bin/docker rm -f yg-license-server
 ExecStartPre=/usr/bin/docker pull ${IMAGE}

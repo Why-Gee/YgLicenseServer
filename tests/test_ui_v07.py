@@ -203,3 +203,19 @@ def test_events_page_has_save_as_button(client: TestClient) -> None:
     assert b"Save As" in r.content
     # JS still calls the same endpoint.
     assert b"/admin/events.csv" in r.content
+
+
+def test_admin_js_is_served_from_static(client: TestClient) -> None:
+    """Shared admin JS moved out of base.html into /static/admin.js. Pin
+    the mount + that base.html references the external file (cache-busted
+    with ?v=...) instead of carrying the inline block."""
+    r = client.get("/static/admin.js")
+    assert r.status_code == 200
+    assert "window.confirmModal" in r.text
+    assert "bulk-form" in r.text  # bulk-delete handler still bundled
+    # base.html points at the external file, not an inline <script>...</script>
+    cookies = _login(client)
+    page = client.get("/admin", cookies=cookies).text
+    assert "/static/admin.js" in page
+    # The inline implementation is gone — only a comment mentions confirmModal.
+    assert "window.confirmModal = function" not in page
