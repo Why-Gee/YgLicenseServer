@@ -17,18 +17,44 @@ param(
     # Skip the systemctl restart on the VM. Useful for "just tag and push,
     # I'll restart manually later".
     [switch]$NoRestart,
+    # Skip the env-file push step. Use when prod env hasn't changed and you
+    # just want to ship code.
+    [switch]$NoEnvPush,
+    # ── Env-file management modes (mutually exclusive with the bump flags) ──
+    # Pull the VM's current /etc/yg-license-server/yg-license-server.env down
+    # to local .env.prod. One-time bootstrap when switching to laptop-managed
+    # secrets. Exits without doing anything else.
+    [switch]$ImportEnv,
+    # Generate fresh ADMIN_TOKEN + SESSION_SECRET + LICENSE_KEY_ENCRYPTION_KEY
+    # in local .env.prod, then run the rest of the deploy. The OLD KEK is
+    # preserved as LICENSE_KEY_ENCRYPTION_KEY_PREV so you can decrypt
+    # existing rows before re-running the rewrap under the new KEK.
+    [switch]$RotateSecrets,
+    # Push .env.prod to the VM + restart, without bumping version or waiting
+    # for CI. Use for secret rotations on a release that's already deployed.
+    [switch]$PushEnvOnly,
     # Print what would happen without doing it.
     [switch]$DryRun
 )
 
 # deploy.ps1 -- ship whatever version is in app/__init__.py: tag, push, wait
-# for CI, restart the GCP VM. The session that modified the code owns the
-# version bump (it's part of the feature change).
+# for CI, push .env.prod to the VM, restart the GCP VM. The session that
+# modified the code owns the version bump (it's part of the feature change).
 #
+# Code deploys:
 #   ./deploy.ps1            -- ship the current version (no bump)
 #   ./deploy.ps1 -Patch     -- 0.3.0 -> 0.3.1, PR + squash-merge, ship
 #   ./deploy.ps1 -Minor     -- 0.3.0 -> 0.4.0, PR + squash-merge, ship
 #   ./deploy.ps1 -Major     -- 0.3.0 -> 1.0.0, PR + squash-merge, ship
+#
+# Prod env (.env.prod, gitignored, laptop is source of truth):
+#   ./deploy.ps1 -ImportEnv      -- pull VM's current env -> local .env.prod
+#                                   (one-time bootstrap)
+#   ./deploy.ps1 -PushEnvOnly    -- push .env.prod + restart, no image bump
+#   ./deploy.ps1 -RotateSecrets  -- regenerate ADMIN_TOKEN/SESSION_SECRET/KEK
+#                                   in .env.prod, then push (combine with
+#                                   -PushEnvOnly for rotation-only flow)
+#   ./deploy.ps1 -NoEnvPush      -- code-only deploy, leave VM env alone
 #
 # Branch-protected main: bumps go through a yg/release-vX.Y.Z PR which we
 # create + squash-merge via gh, then tag the resulting main HEAD.
@@ -47,6 +73,15 @@ if ($bumps.Count -gt 1) {
     exit 1
 }
 $DoBump = $bumps.Count -eq 1
+$envModes = @($ImportEnv, $PushEnvOnly) | Where-Object { $_ }
+if ($envModes.Count -gt 1) {
+    Write-Host "Specify at most one of: -ImportEnv, -PushEnvOnly" -ForegroundColor Red
+    exit 1
+}
+if ($ImportEnv -and ($DoBump -or $RotateSecrets -or $PushEnvOnly)) {
+    Write-Host "-ImportEnv is a one-shot bootstrap; can't combine with bump/rotate/push." -ForegroundColor Red
+    exit 1
+}
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 function Run([string]$cmd, [switch]$Capture) {
@@ -88,7 +123,228 @@ function Write-Version([string]$file, [string]$pattern, [string]$replacement) {
     Set-Content -LiteralPath $file -Value $new -NoNewline
 }
 
-# ── pre-flight ───────────────────────────────────────────────────────────────
+# ── prod-env management ─────────────────────────────────────────────────────
+# Source-of-truth lives at .env.prod (gitignored). VM gets a verbatim copy at
+# /etc/yg-license-server/yg-license-server.env. Three flows touch this file:
+#   - -ImportEnv: pull VM's current contents down (bootstrap)
+#   - -RotateSecrets: regenerate ADMIN_TOKEN/SESSION_SECRET/KEK in-place
+#   - normal deploy: scp + atomic install on VM, timestamped backup kept
+
+$PROD_ENV_PATH = Join-Path $root '.env.prod'
+$VM_ZONE = 'us-west1-a'
+$VM_NAME = 'yg-license-server'
+$VM_ENV_PATH = '/etc/yg-license-server/yg-license-server.env'
+
+function Read-EnvLines([string]$path) {
+    # Returns the file as a string array (one line per entry). Comments,
+    # blanks, and KV lines all live in this array; Get-EnvLineValue +
+    # Set-EnvLineValue operate on it as a unit. Order preserved on write.
+    if (-not (Test-Path -LiteralPath $path)) { return @() }
+    return @(Get-Content -LiteralPath $path)
+}
+
+function Write-EnvLines([string]$path, [string[]]$lines) {
+    # POSIX-friendly trailing newline + LF line endings (dockerd env-file
+    # parser reads CRLF as part of the value otherwise, breaking secrets).
+    $body = ($lines -join "`n") + "`n"
+    [System.IO.File]::WriteAllText($path, $body, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Get-EnvLineValue([string[]]$lines, [string]$key) {
+    foreach ($line in $lines) {
+        if ($line -match "^\s*$([regex]::Escape($key))\s*=(.*)$") {
+            return $matches[1]
+        }
+    }
+    return $null
+}
+
+function Set-EnvLineValue([string[]]$lines, [string]$key, [string]$value) {
+    # Returns a new string[] with the key updated (or appended). Caller
+    # reassigns: `$lines = Set-EnvLineValue $lines 'FOO' 'bar'`.
+    $found = $false
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $lines) {
+        if ((-not $found) -and ($line -match "^\s*$([regex]::Escape($key))\s*=")) {
+            $out.Add("$key=$value")
+            $found = $true
+        } else {
+            $out.Add($line)
+        }
+    }
+    if (-not $found) {
+        $out.Add("$key=$value")
+    }
+    return ,$out.ToArray()
+}
+
+function New-RandomToken {
+    # 32 random bytes -> urlsafe-base64 (no padding). Same shape as
+    # `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+    $bytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $b64 = [Convert]::ToBase64String($bytes)
+    return ($b64 -replace '\+','-' -replace '/','_' -replace '=','')
+}
+
+function New-FernetKey {
+    # Fernet key is 32 raw bytes encoded as urlsafe-b64 WITH padding.
+    $bytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $b64 = [Convert]::ToBase64String($bytes)
+    return ($b64 -replace '\+','-' -replace '/','_')
+}
+
+function Test-ProdEnvFile([string]$path) {
+    # Validates that the on-disk .env.prod has the required keys with
+    # non-empty values + secrets are distinct. Returns $null on success,
+    # a string error message on failure.
+    if (-not (Test-Path -LiteralPath $path)) { return ".env.prod not found at $path" }
+    $lines = Read-EnvLines $path
+    $required = @('ADMIN_TOKEN','SESSION_SECRET','DATABASE_URL','IMAGE')
+    foreach ($k in $required) {
+        $v = Get-EnvLineValue $lines $k
+        if ([string]::IsNullOrWhiteSpace($v)) { return "missing/empty $k in $path" }
+    }
+    $admin = Get-EnvLineValue $lines 'ADMIN_TOKEN'
+    $sess  = Get-EnvLineValue $lines 'SESSION_SECRET'
+    if ($admin -eq $sess) { return "ADMIN_TOKEN equals SESSION_SECRET -- must be distinct" }
+    return $null
+}
+
+function Invoke-VmSsh([string]$remoteCmd) {
+    # Run an arbitrary command on the VM as the gcloud-authenticated user.
+    # -t allocates a TTY so sudo prompts (if ever needed) can echo properly.
+    if ($DryRun) {
+        Write-Host "[dry-run] gcloud compute ssh $VM_NAME -- $remoteCmd" -ForegroundColor Yellow
+        return ""
+    }
+    $out = & gcloud compute ssh $VM_NAME --zone=$VM_ZONE --ssh-flag=-t --command=$remoteCmd 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "ssh failed (exit $LASTEXITCODE): $remoteCmd`n$out" }
+    return $out
+}
+
+function Invoke-VmScp([string]$localPath, [string]$remotePath, [switch]$Reverse) {
+    # Copy via gcloud compute scp. If -Reverse, pull from VM to laptop.
+    if ($DryRun) {
+        $arrow = if ($Reverse) { '<-' } else { '->' }
+        Write-Host "[dry-run] scp $localPath $arrow VM:$remotePath" -ForegroundColor Yellow
+        return
+    }
+    if ($Reverse) {
+        & gcloud compute scp --zone=$VM_ZONE "${VM_NAME}:${remotePath}" $localPath 2>&1 | Out-Host
+    } else {
+        & gcloud compute scp --zone=$VM_ZONE $localPath "${VM_NAME}:${remotePath}" 2>&1 | Out-Host
+    }
+    if ($LASTEXITCODE -ne 0) { throw "scp failed (exit $LASTEXITCODE)" }
+}
+
+function Import-ProdEnvFromVm {
+    # Pulls the VM's current env file to local .env.prod. Refuses to clobber
+    # an existing local file -- the user has to delete .env.prod first if
+    # they really want a re-import.
+    if (Test-Path -LiteralPath $PROD_ENV_PATH) {
+        throw "$PROD_ENV_PATH already exists. Delete it first if you really want to re-import from the VM."
+    }
+    Write-Host "==> pulling VM env file to $PROD_ENV_PATH..."
+    # /etc/yg-license-server/* is root-owned 0600; sudo-copy to /tmp + chmod
+    # 644 so the SSH user (which is whatever gcloud authed as) can read it
+    # for scp. The temp file is short-lived and lives only on the VM.
+    Invoke-VmSsh "sudo cp $VM_ENV_PATH /tmp/yg-license-env.export && sudo chmod 644 /tmp/yg-license-env.export"
+    Invoke-VmScp -Reverse '/tmp/yg-license-env.export' $PROD_ENV_PATH
+    Invoke-VmSsh "sudo rm -f /tmp/yg-license-env.export"
+    Write-Host "imported -> $PROD_ENV_PATH" -ForegroundColor Green
+    Write-Host "  Treat this file as a secret. It is gitignored." -ForegroundColor DarkGray
+}
+
+function Update-LocalSecrets {
+    # Rotates ADMIN_TOKEN, SESSION_SECRET, and LICENSE_KEY_ENCRYPTION_KEY in
+    # local .env.prod. Old KEK is preserved as LICENSE_KEY_ENCRYPTION_KEY_PREV
+    # so the operator can run a two-step rewrap (decrypt old, encrypt new).
+    if (-not (Test-Path -LiteralPath $PROD_ENV_PATH)) {
+        throw "$PROD_ENV_PATH not found. Run with -ImportEnv first (or copy from .env.prod.example)."
+    }
+    $lines = Read-EnvLines $PROD_ENV_PATH
+    $newAdmin = New-RandomToken
+    $newSess  = New-RandomToken
+    $newKek   = New-FernetKey
+    $oldKek   = Get-EnvLineValue $lines 'LICENSE_KEY_ENCRYPTION_KEY'
+    $lines = Set-EnvLineValue $lines 'ADMIN_TOKEN' $newAdmin
+    $lines = Set-EnvLineValue $lines 'SESSION_SECRET' $newSess
+    $lines = Set-EnvLineValue $lines 'LICENSE_KEY_ENCRYPTION_KEY' $newKek
+    if ($oldKek -and $oldKek -ne $newKek) {
+        $lines = Set-EnvLineValue $lines 'LICENSE_KEY_ENCRYPTION_KEY_PREV' $oldKek
+    }
+    Write-EnvLines $PROD_ENV_PATH $lines
+    Write-Host "rotated ADMIN_TOKEN + SESSION_SECRET + KEK in $PROD_ENV_PATH" -ForegroundColor Green
+    Write-Host "  new ADMIN_TOKEN: $newAdmin" -ForegroundColor Cyan
+    Write-Host "  (copy this into ASM's LS_ADMIN_TOKEN now -- it won't be shown again)" -ForegroundColor DarkGray
+}
+
+function Push-ProdEnv {
+    # scp .env.prod to /tmp on the VM, then move into place with root perms
+    # + 0600 mode. Keep a timestamped backup so a botched push can be
+    # rolled back manually.
+    $err = Test-ProdEnvFile $PROD_ENV_PATH
+    if ($err) { throw "validation failed: $err" }
+    Write-Host "==> pushing $PROD_ENV_PATH to VM..."
+    Invoke-VmScp $PROD_ENV_PATH '/tmp/yg-license-env.new'
+    $ts = Get-Date -Format 'yyyyMMddHHmmss'
+    $backup = "${VM_ENV_PATH}.bak.${ts}"
+    # Atomic-ish: backup, install (writes tmpfile + rename within same dir).
+    $remote = "sudo cp -a $VM_ENV_PATH $backup && sudo install -m 600 -o root -g root /tmp/yg-license-env.new $VM_ENV_PATH && sudo rm -f /tmp/yg-license-env.new && echo 'env installed, backup at $backup'"
+    Invoke-VmSsh $remote | Out-Host
+    Write-Host "[env] pushed + installed (backup kept on VM at $backup)" -ForegroundColor Green
+}
+
+# ── tool check (runs for every mode, including env-only flows) ──────────────
+function Find-Gcloud {
+    if (Get-Command gcloud -ErrorAction SilentlyContinue) { return $true }
+    $candidates = @(
+        "$env:LOCALAPPDATA\Google\Cloud SDK\google-cloud-sdk\bin",
+        "$env:USERPROFILE\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin",
+        "${env:ProgramFiles(x86)}\Google\Cloud SDK\google-cloud-sdk\bin",
+        "$env:ProgramFiles\Google\Cloud SDK\google-cloud-sdk\bin"
+    )
+    foreach ($d in $candidates) {
+        if (Test-Path (Join-Path $d 'gcloud.cmd')) {
+            $env:Path = "$d;$env:Path"
+            Write-Host "  (gcloud not on PATH; auto-detected at $d)" -ForegroundColor DarkGray
+            return $true
+        }
+    }
+    return $false
+}
+
+# Env-only modes need just gcloud; the version-tag flow needs all three.
+$toolsNeeded = if ($ImportEnv -or $PushEnvOnly) { @('gcloud') } else { @('git','gh','gcloud') }
+foreach ($tool in $toolsNeeded) {
+    $found = if ($tool -eq 'gcloud') { Find-Gcloud } else { [bool](Get-Command $tool -ErrorAction SilentlyContinue) }
+    if (-not $found) {
+        Write-Host "$tool not found in PATH." -ForegroundColor Red
+        exit 1
+    }
+}
+
+# ── ImportEnv: one-shot pull, then exit ─────────────────────────────────────
+if ($ImportEnv) {
+    Import-ProdEnvFromVm
+    exit 0
+}
+
+# ── PushEnvOnly: skip version bump + CI wait, just push env + restart ───────
+if ($PushEnvOnly) {
+    if ($RotateSecrets) { Update-LocalSecrets }
+    Push-ProdEnv
+    if (-not $NoRestart) {
+        Write-Host "==> restarting yg-license-server.service on GCP VM..."
+        Invoke-VmSsh "sudo systemctl restart yg-license-server.service" | Out-Host
+    }
+    Write-Host "done." -ForegroundColor Green
+    exit 0
+}
+
+# ── pre-flight (version-tag flow only) ──────────────────────────────────────
 $current = Read-Version
 if ($DoBump) {
     $kind = if ($Patch) { 'patch' } elseif ($Minor) { 'minor' } else { 'major' }
@@ -129,35 +385,6 @@ $existing = git tag -l $tag
 if ($existing) {
     Write-Host "tag $tag already exists locally. Aborting." -ForegroundColor Red
     exit 1
-}
-
-# Required tools. gcloud is often installed by winget without being added to
-# PATH -- probe the well-known install locations and prepend on-the-fly so
-# deploy works without the user fixing their PATH first.
-function Find-Gcloud {
-    if (Get-Command gcloud -ErrorAction SilentlyContinue) { return $true }
-    $candidates = @(
-        "$env:LOCALAPPDATA\Google\Cloud SDK\google-cloud-sdk\bin",
-        "$env:USERPROFILE\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin",
-        "${env:ProgramFiles(x86)}\Google\Cloud SDK\google-cloud-sdk\bin",
-        "$env:ProgramFiles\Google\Cloud SDK\google-cloud-sdk\bin"
-    )
-    foreach ($d in $candidates) {
-        if (Test-Path (Join-Path $d 'gcloud.cmd')) {
-            $env:Path = "$d;$env:Path"
-            Write-Host "  (gcloud not on PATH; auto-detected at $d)" -ForegroundColor DarkGray
-            return $true
-        }
-    }
-    return $false
-}
-
-foreach ($tool in @('git', 'gh', 'gcloud')) {
-    $found = if ($tool -eq 'gcloud') { Find-Gcloud } else { [bool](Get-Command $tool -ErrorAction SilentlyContinue) }
-    if (-not $found) {
-        Write-Host "$tool not found in PATH." -ForegroundColor Red
-        exit 1
-    }
 }
 
 # ── 1. bump version files (if --Patch/--Minor/--Major given) ────────────────
@@ -240,6 +467,23 @@ if ($SkipCiWait) {
         }
     }
     Write-Host "[4/6] CI green, image ghcr.io/why-gee/yg-license-server:$tag published"
+}
+
+# ── 4.5 rotate (if asked) + push .env.prod to VM ────────────────────────────
+# Env file is laptop-managed (.env.prod, gitignored). Push happens BEFORE
+# restart so the new container picks up the new values. -NoEnvPush skips
+# the push (use when only the image changed and env is already in sync).
+if ($RotateSecrets) {
+    Update-LocalSecrets
+}
+if ($NoEnvPush) {
+    Write-Host "[4.5/6] skipped env push (--NoEnvPush)" -ForegroundColor Yellow
+} elseif (-not (Test-Path -LiteralPath $PROD_ENV_PATH)) {
+    Write-Host "[4.5/6] no $PROD_ENV_PATH on disk -- skipping env push." -ForegroundColor Yellow
+    Write-Host "  Run with -ImportEnv to bootstrap from the VM's current file." -ForegroundColor DarkGray
+} else {
+    Write-Host "[4.5/6] pushing .env.prod to VM..."
+    Push-ProdEnv
 }
 
 # ── 5. restart VM ────────────────────────────────────────────────────────────
