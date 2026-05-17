@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app import __version__
 from app.db import SessionLocal
+from app.log_format import configure_logging
 from app.rate_limit import limiter, rate_limit_exceeded_handler
 from app.request_id import RequestIdLogFilter, RequestIdMiddleware
 from app.routers.admin_ui import ALL_ROUTERS as ADMIN_UI_ROUTERS
@@ -25,16 +26,12 @@ from app.stripe_webhook import router as stripe_router
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Re-attach root handler AFTER uvicorn's dictConfig wipes it. force=True
-    # clears whatever uvicorn left so app loggers ("license-server.*") emit
-    # through our format. Uvicorn's own loggers keep their own handlers.
-    # Format includes %(request_id)s so every log line during a request
-    # carries the correlation id; lines outside a request show '-'.
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s [req=%(request_id)s]: %(message)s",
-        force=True,
-    )
+    # Re-attach root handler AFTER uvicorn's dictConfig wipes it. The
+    # configure_logging() helper picks text or JSON formatter based on the
+    # `LOG_FORMAT` env var (default text, set `LOG_FORMAT=json` in prod for
+    # structured logs that downstream ingestion can parse without a regex).
+    # Uvicorn's own loggers keep their own handlers.
+    configure_logging()
     # Attach the request-id filter to the root handler so every record gets
     # the `request_id` attribute set before format() runs.
     rid_filter = RequestIdLogFilter()

@@ -205,6 +205,10 @@ install -m 0755 "$SCRIPT_DIR/backup.sh" /usr/local/bin/yg-license-backup.sh
 install -m 0644 "$SCRIPT_DIR/yg-license-backup.service" /etc/systemd/system/yg-license-backup.service
 install -m 0644 "$SCRIPT_DIR/yg-license-backup.timer"   /etc/systemd/system/yg-license-backup.timer
 
+echo "==> install events-pruning systemd units"
+install -m 0644 "$SCRIPT_DIR/yg-license-prune-events.service" /etc/systemd/system/yg-license-prune-events.service
+install -m 0644 "$SCRIPT_DIR/yg-license-prune-events.timer"   /etc/systemd/system/yg-license-prune-events.timer
+
 # Surface the bucket name in the env file so backup.sh + future ops scripts
 # read the same value.
 ensure_env_line "BACKUP_BUCKET" "$BACKUP_BUCKET"
@@ -215,6 +219,7 @@ systemctl enable --now duckdns-update.timer
 systemctl start duckdns-update.service  # one-shot kick to register IP immediately
 systemctl enable --now yg-license-server.service
 systemctl enable --now yg-license-backup.timer
+systemctl enable --now yg-license-prune-events.timer
 
 echo
 echo "==> wait for service health"

@@ -1,0 +1,15 @@
+[Unit]
+Description=YgLicenseServer events-table prune (heartbeat rows older than 90d)
+After=network-online.target yg-license-server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs python -m app.scripts.prune_events inside the same container image
+# the server runs. `docker run --rm` so it doesn't tangle with the live
+# service; mounts the same data volume so it sees the same SQLite DB.
+ExecStart=/usr/bin/docker run --rm \
+  --env-file /etc/yg-license-server/yg-license-server.env \
+  -v /var/lib/yg-license-server:/data \
+  ghcr.io/why-gee/yg-license-server:latest \
+  python -m app.scripts.prune_events
