@@ -224,17 +224,44 @@ function Invoke-VmSsh([string]$remoteCmd) {
     return $out
 }
 
-function Invoke-VmScp([string]$localPath, [string]$remotePath, [switch]$Reverse) {
-    # Copy via gcloud compute scp. If -Reverse, pull from VM to laptop.
-    if ($DryRun) {
-        $arrow = if ($Reverse) { '<-' } else { '->' }
-        Write-Host "[dry-run] scp $localPath $arrow VM:$remotePath" -ForegroundColor Yellow
-        return
+function ConvertTo-ScpFriendlyPath([string]$absPath) {
+    # gcloud on Windows shells out to bundled pscp.exe, which parses
+    # 'L:\path' as host:path (the drive-letter colon trips it). Convert to
+    # a path relative to the current working directory so pscp sees no
+    # colon. Falls back to the absolute path on cross-drive cases (rare).
+    $cwd = (Get-Location).Path
+    try {
+        $rel = [System.IO.Path]::GetRelativePath($cwd, [System.IO.Path]::GetFullPath($absPath))
+        # GetRelativePath returns "." or "../..." even across drives; only
+        # accept it if it doesn't start with the drive letter again.
+        if ($rel -match '^[A-Za-z]:') { return $absPath }
+        return $rel
+    } catch {
+        return $absPath
     }
+}
+
+function Invoke-VmScp([string]$src, [string]$dst, [switch]$Reverse) {
+    # Copy via gcloud compute scp. $src and $dst are direction-dependent:
+    #   normal     -- $src is LOCAL, $dst is REMOTE (push)
+    #   -Reverse   -- $src is REMOTE, $dst is LOCAL (pull)
+    # The local-side path goes through ConvertTo-ScpFriendlyPath so pscp.exe
+    # (gcloud's bundled scp on Windows) doesn't choke on the drive-letter
+    # colon.
     if ($Reverse) {
-        & gcloud compute scp --zone=$VM_ZONE "${VM_NAME}:${remotePath}" $localPath 2>&1 | Out-Host
+        $localDst = ConvertTo-ScpFriendlyPath $dst
+        if ($DryRun) {
+            Write-Host "[dry-run] scp VM:$src -> $localDst" -ForegroundColor Yellow
+            return
+        }
+        & gcloud compute scp --zone=$VM_ZONE "${VM_NAME}:${src}" $localDst 2>&1 | Out-Host
     } else {
-        & gcloud compute scp --zone=$VM_ZONE $localPath "${VM_NAME}:${remotePath}" 2>&1 | Out-Host
+        $localSrc = ConvertTo-ScpFriendlyPath $src
+        if ($DryRun) {
+            Write-Host "[dry-run] scp $localSrc -> VM:$dst" -ForegroundColor Yellow
+            return
+        }
+        & gcloud compute scp --zone=$VM_ZONE $localSrc "${VM_NAME}:${dst}" 2>&1 | Out-Host
     }
     if ($LASTEXITCODE -ne 0) { throw "scp failed (exit $LASTEXITCODE)" }
 }
