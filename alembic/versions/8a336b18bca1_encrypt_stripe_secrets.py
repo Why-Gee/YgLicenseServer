@@ -28,6 +28,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "8a336b18bca1"
@@ -57,6 +58,19 @@ def upgrade() -> None:
     # Re-encrypt existing plaintext values. Local import keeps the migration
     # importable without app code on the path (alembic envs sometimes hide it).
     from app.keystore import encrypt_secret, is_encrypted
+
+    # Skip the data-rewrap loop when running in --sql / offline mode. Fernet
+    # ciphertexts are non-deterministic, so we cannot emit a static UPDATE
+    # that reproduces them. The operator can run `alembic upgrade head` online
+    # in a second step (idempotent: is_encrypted() short-circuits if already
+    # wrapped). Surfaces a warning at the bottom of the generated SQL.
+    if op.get_context().as_sql:
+        print(
+            "-- NOTE: data rewrap loop skipped in --sql/offline mode. "
+            "Run `alembic upgrade head` online against the same DB after "
+            "applying this DDL to wrap any legacy plaintext rows."
+        )
+        return
 
     conn = op.get_bind()
     rows = conn.execute(

@@ -168,6 +168,50 @@ def test_edit_form_ignores_customer_name_field(client: TestClient) -> None:
     assert _read_customer_name_by_email("buyer@example.com") == "Original"
 
 
+def test_customer_lookup_returns_existing(client: TestClient) -> None:
+    """/admin/customers/lookup powers the issue-modal's email-blur check:
+    when the email is taken, the modal locks the name field + shows a link
+    to the proper rename path. Cookie-auth, JSON envelope."""
+    _create_product(client)
+    cookies = _login(client)
+    client.post(
+        "/admin/products/asm/licenses",
+        data=_issue_form(
+            cookies,
+            email="buyer@example.com", customer_name="Initial Name",
+            plan="standard", max_users="10", valid_days="30",
+            features_json="{}",
+        ),
+        cookies=cookies, follow_redirects=False,
+    )
+    r = client.get(
+        "/admin/customers/lookup?email=buyer@example.com", cookies=cookies,
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["exists"] is True
+    assert data["name"] == "Initial Name"
+    assert data["id"]
+
+
+def test_customer_lookup_returns_not_exists_for_new_email(client: TestClient) -> None:
+    cookies = _login(client)
+    r = client.get(
+        "/admin/customers/lookup?email=nobody@example.test", cookies=cookies,
+    )
+    assert r.status_code == 200
+    assert r.json() == {"exists": False}
+
+
+def test_customer_lookup_requires_login(client: TestClient) -> None:
+    """No cookie -> redirect to /admin/login like every other /admin route."""
+    r = client.get(
+        "/admin/customers/lookup?email=x@example.com", follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/admin/login"
+
+
 def test_customer_edit_route_renames(client: TestClient) -> None:
     """The proper rename path: POST /admin/customers/{id}/edit with name."""
     _create_product(client)

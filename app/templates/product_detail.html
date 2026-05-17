@@ -359,6 +359,71 @@
     return initialSnapshot !== null && snapshot() !== initialSnapshot;
   }
 
+  // ----- Issue-mode email lookup -----------------------------------------
+  // When the admin types a new email, the name field is the initial set for
+  // a brand-new customer. When the email belongs to an EXISTING customer,
+  // the server-side service ignores any name on the form (it would silently
+  // rename the customer on every other product they own), so we lock the
+  // field in the UI too and surface a link to the proper rename path.
+  // Implemented client-side via /admin/customers/lookup -- cookie-auth,
+  // returns {exists, name, id}.
+  var lookupAbort = null;
+  var lookupLastEmail = null;
+  function resetIssueLookupState() {
+    nameIn.removeAttribute('readonly');
+    nameIn.removeAttribute('title');
+    if (nameHint) nameHint.style.display = 'none';
+    if (customerLink) customerLink.href = '/admin/customers';
+    lookupLastEmail = null;
+    if (lookupAbort) { lookupAbort.abort(); lookupAbort = null; }
+  }
+  function onEmailLookup() {
+    // Only runs in issue mode (edit mode disables the email row entirely).
+    if (emailRow.style.display === 'none') return;
+    var email = emailIn.value.trim();
+    if (!email || email === lookupLastEmail) return;
+    if (lookupAbort) { lookupAbort.abort(); }
+    lookupAbort = new AbortController();
+    lookupLastEmail = email;
+    fetch(
+      '/admin/customers/lookup?email=' + encodeURIComponent(email),
+      { credentials: 'same-origin', signal: lookupAbort.signal },
+    ).then(function (r) {
+      // 401/redirect -> session lapsed; fall back silently. The submit
+      // path will surface the auth failure with a real redirect.
+      if (!r.ok) return null;
+      return r.json();
+    }).then(function (data) {
+      if (!data || lookupLastEmail !== email) return;  // stale response
+      if (data.exists) {
+        // Lock the field; pre-fill with the persisted name so the admin
+        // sees who they're issuing for. The form still posts customer_name
+        // but issue_license ignores it for existing customers.
+        nameIn.value = data.name || '';
+        nameIn.setAttribute('readonly', '');
+        nameIn.setAttribute(
+          'title',
+          'Existing customer -- name is read-only here. Use the Customers page to rename.',
+        );
+        if (nameHint) nameHint.style.display = '';
+        if (customerLink) {
+          customerLink.href = '/admin/customers?lookup=' + encodeURIComponent(email);
+        }
+      } else {
+        // New email -- field is the initial-set, leave it editable.
+        nameIn.removeAttribute('readonly');
+        nameIn.removeAttribute('title');
+        if (nameHint) nameHint.style.display = 'none';
+      }
+    }).catch(function () { /* aborted or network err; ignore */ });
+  }
+  emailIn.addEventListener('blur', onEmailLookup);
+  // Also trigger on a deliberate Enter press inside the email field, so the
+  // admin can confirm without leaving the field via mouse.
+  emailIn.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); onEmailLookup(); }
+  });
+
   function close() {
     ov.style.display = 'none';
     document.removeEventListener('keydown', onKey);
@@ -510,6 +575,9 @@
       updateBtn.style.display = 'none';
       testBtn.style.display = 'none';
       updateHint.style.display = 'none';
+      // Reset the issue-mode email-lookup hint state so a stale message
+      // from a prior open doesn't bleed into this one.
+      resetIssueLookupState();
     }
     ov.style.display = '';
     document.addEventListener('keydown', onKey);

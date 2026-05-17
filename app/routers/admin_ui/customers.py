@@ -1,11 +1,12 @@
-"""Customer list + edit."""
+"""Customer list + edit + email-lookup (for the issue-license modal)."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models import Customer
 from app.routers.admin_ui._deps import err_code, require_csrf, require_login, templates
 from app.services import customers as customers_svc
 from app.services.errors import Conflict, NotFound, ValidationFailed
@@ -40,6 +41,41 @@ def customers_list(
             "next_cursor": next_cursor,
         },
     )
+
+
+@router.get("/admin/customers/lookup")
+def customer_lookup(
+    request: Request,
+    email: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Email-keyed lookup used by the issue-license modal. The modal calls
+    this on email-blur so the admin sees whether the address belongs to an
+    existing customer (whose name must not be silently rewritten via the
+    license form) or a new one (where the name field is the initial set).
+
+    Cookie-auth like every other /admin/* route. Returns 200 with a small
+    JSON envelope -- `exists=false` for a new email, `exists=true` plus the
+    persisted name + customer id when the row is already there. The id lets
+    the modal link directly to /admin/customers#cid for renames."""
+    require_login(request)
+    email_clean = email.strip()
+    if not email_clean:
+        return JSONResponse({"exists": False})
+    # Case-insensitive match: emails are case-insensitive per RFC 5321 in
+    # practice, and stored values may have mixed case from import paths.
+    c = (
+        db.query(Customer)
+        .filter(Customer.email.ilike(email_clean))
+        .one_or_none()
+    )
+    if c is None:
+        return JSONResponse({"exists": False})
+    return JSONResponse({
+        "exists": True,
+        "id": c.id,
+        "name": c.name or "",
+    })
 
 
 @router.post("/admin/customers/{cid}/edit")
