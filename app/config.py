@@ -23,6 +23,11 @@ class Settings(BaseModel):
     # private_key_pem in the DB. Unset -> private keys stored plaintext (legacy
     # behavior). See app.keystore for the envelope format.
     key_encryption_key: str = ""
+    # Previous KEK, only consulted by `python -m app.scripts.rewrap_secrets
+    # --migrate-from-prev` during a KEK rotation: decrypt under PREV, re-encrypt
+    # under the current KEK. Unset in steady state; the deploy script writes it
+    # transiently on `-RotateSecrets` and the operator clears it after rewrap.
+    key_encryption_key_prev: str = ""
     # Postgres connection-pool tuning. Defaults match SQLAlchemy's QueuePool
     # defaults; bump pool_size when a deploy sees frequent "QueuePool limit
     # reached" warnings. pool_recycle defends against intermediate-NAT idle
@@ -44,6 +49,7 @@ def get_settings() -> Settings:
         resend_api_key=os.environ.get("RESEND_API_KEY", ""),
         email_from=os.environ.get("EMAIL_FROM", "onboarding@resend.dev"),
         key_encryption_key=os.environ.get("LICENSE_KEY_ENCRYPTION_KEY", ""),
+        key_encryption_key_prev=os.environ.get("LICENSE_KEY_ENCRYPTION_KEY_PREV", ""),
         db_pool_size=int(os.environ.get("DB_POOL_SIZE", "5")),
         db_max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "10")),
         db_pool_recycle=int(os.environ.get("DB_POOL_RECYCLE", "1800")),

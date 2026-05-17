@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.models import License
+from app.rate_limit import limiter
 from app.security import check_admin_bearer
 from app.services import customers as customers_svc
 from app.services import licenses as licenses_svc
@@ -90,6 +91,7 @@ def _client_ip_hash(request: Request) -> str | None:
 
 
 @router.post("/v1/check", response_model=CheckOut)
+@limiter.limit("60/minute")
 def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> CheckOut:
     try:
         result = check_license(

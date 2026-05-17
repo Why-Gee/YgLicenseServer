@@ -8,11 +8,13 @@ from fastapi import FastAPI, Request, Response
 from fastapi import status as http_status
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import __version__
 from app.db import SessionLocal
+from app.rate_limit import limiter, rate_limit_exceeded_handler
 from app.request_id import RequestIdLogFilter, RequestIdMiddleware
 from app.routers.admin_ui import ALL_ROUTERS as ADMIN_UI_ROUTERS
 from app.routers.admin_ui import LoginRequired
@@ -102,6 +104,11 @@ def _validate_secrets_at_boot() -> None:
 
 
 app = FastAPI(title="YgLicenseServer", version=__version__, lifespan=lifespan)
+# Rate limiter: wired here so per-endpoint decorators (`@limiter.limit(...)`)
+# can find `request.app.state.limiter`. See app.rate_limit for the IP-key
+# logic; storage is in-process, fine for single-instance.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 # Mount the request-id middleware FIRST so it wraps every other middleware
 # (incl. ones FastAPI itself adds) -- we want the id available before any
 # log line the request generates, including authn/CSRF middleware lines.
@@ -149,6 +156,19 @@ def healthz() -> dict:
 
 @app.get("/readyz")
 def readyz(response: Response) -> dict:
+    """Liveness AND key-material readiness. Returns 200 only when:
+      - the DB is reachable, AND
+      - either no product has encrypted secrets, OR a sample-decrypt of one
+        product's `private_key_pem` succeeds under the current KEK.
+
+    Why sample-decrypt: a KEK mismatch (PREV not cleaned up, env wiped,
+    typo on rotate) would silently 500 every issue/check; surfacing it
+    here lets external monitors page before the first signed request hits
+    the broken row."""
+    from app.config import get_settings
+    from app.keystore import decrypt_secret, is_encrypted
+    from app.models import Product
+
     db_state = "ok"
     try:
         with SessionLocal() as s:
@@ -157,8 +177,47 @@ def readyz(response: Response) -> dict:
         db_state = type(e).__name__
     if db_state != "ok":
         response.status_code = http_status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "degraded", "version": __version__, "db": db_state}
-    return {"status": "ok", "version": __version__, "db": "ok"}
+        return {
+            "status": "degraded", "version": __version__,
+            "db": db_state, "kek": "unknown", "sample_decrypt": "skipped",
+        }
+
+    settings = get_settings()
+    kek_state = "set" if settings.key_encryption_key else "unset"
+    sample = "skipped"
+    try:
+        with SessionLocal() as s:
+            # Find the first product with an encrypted private key (the
+            # field most likely to be encrypted; products created without a
+            # KEK store plaintext, which we treat as "nothing to verify").
+            for p in s.query(Product).all():
+                if is_encrypted(p.private_key_pem):
+                    decrypt_secret(p.private_key_pem)
+                    sample = "ok"
+                    break
+            else:
+                sample = "no_encrypted_rows"
+    except RuntimeError as e:
+        # KEK mismatch or missing -> caller must page someone.
+        sample = "fail"
+        kek_state = "mismatch" if settings.key_encryption_key else "missing"
+        response.status_code = http_status.HTTP_503_SERVICE_UNAVAILABLE
+        return {
+            "status": "degraded", "version": __version__,
+            "db": "ok", "kek": kek_state, "sample_decrypt": sample,
+            "detail": str(e),
+        }
+    except SQLAlchemyError as e:
+        response.status_code = http_status.HTTP_503_SERVICE_UNAVAILABLE
+        return {
+            "status": "degraded", "version": __version__,
+            "db": type(e).__name__, "kek": kek_state, "sample_decrypt": "skipped",
+        }
+
+    return {
+        "status": "ok", "version": __version__,
+        "db": "ok", "kek": kek_state, "sample_decrypt": sample,
+    }
 
 
 # Backwards-compat alias for the original /health route.

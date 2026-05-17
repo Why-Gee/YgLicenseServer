@@ -154,18 +154,46 @@ The systemd unit's `ExecStartPre=docker pull ${IMAGE}` will fetch `:latest` (or 
 
 To pin a specific version, edit `/etc/systemd/system/yg-license-server.service` to set `IMAGE=ghcr.io/why-gee/yg-license-server:v0.3.0`, `daemon-reload`, restart.
 
-## 7. Backups
+## 7. Backups (automated to GCS)
 
-The DB file lives at `/var/lib/yg-license-server/license.db` on the host. Phase 2d adds an automated backup script. Until then, manual:
+`install.sh` wires up a nightly `sqlite3 .backup` → gzip → `gs://yglicenseserver-backups/license.db.gz` pipeline. Bucket has object versioning enabled; lifecycle policy deletes versions older than 30 days. Net effect: ~30 daily snapshots retained automatically.
+
+Pieces installed by `install.sh`:
+- `/usr/local/bin/yg-license-backup.sh` — the script (uses python3's stdlib sqlite3, no extra apt install)
+- `/etc/systemd/system/yg-license-backup.service` — oneshot unit
+- `/etc/systemd/system/yg-license-backup.timer` — daily at 03:17 UTC with ±10min jitter
+- IAM binding: `roles/storage.objectAdmin` on the bucket for the VM's default service account (bucket-scoped, not project-wide)
+
+Smoke-test after install:
 
 ```sh
-gcloud compute scp \
-  yg-license-server:/var/lib/yg-license-server/license.db \
-  ~/backups/license-$(date -u +%F).db \
-  --zone=us-west1-a
+sudo systemctl start yg-license-backup.service
+journalctl -u yg-license-backup.service -n 50
+gsutil ls -l gs://yglicenseserver-backups/
+# Expect one fresh object license.db.gz; metadata header carries snapshot timestamp.
 ```
 
-Run weekly until the automated path lands. Losing this file means losing every product's private key — every license stops verifying.
+### Restore from backup
+
+```sh
+# 1. Pick the version. `gsutil ls -a` shows all versions including generations.
+gsutil ls -a gs://yglicenseserver-backups/license.db.gz
+# Each line ends with #<generation>; pick the one you want.
+
+# 2. Download + decompress to a staging path.
+gsutil cp 'gs://yglicenseserver-backups/license.db.gz#<generation>' /tmp/restore.db.gz
+gunzip /tmp/restore.db.gz   # produces /tmp/restore.db
+
+# 3. Stop the server, replace the live DB, fix ownership, restart.
+sudo systemctl stop yg-license-server.service
+sudo cp /var/lib/yg-license-server/license.db /var/lib/yg-license-server/license.db.bak
+sudo cp /tmp/restore.db /var/lib/yg-license-server/license.db
+sudo chown 10001:10001 /var/lib/yg-license-server/license.db
+sudo systemctl start yg-license-server.service
+curl -fsS http://127.0.0.1:8800/readyz
+```
+
+Losing this file means losing every product's private key — every license stops verifying. Keep the bucket alive.
 
 ## Switching to your own domain later
 

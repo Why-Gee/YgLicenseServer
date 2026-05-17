@@ -2,39 +2,41 @@
 
 Run with:
     python -m app.scripts.rewrap_secrets [--dry-run]
+    python -m app.scripts.rewrap_secrets --migrate-from-prev [--dry-run]
 
-What it does:
-- Reads every row from `products`.
-- For each of `private_key_pem`, `stripe_webhook_secret`, `stripe_api_key`,
-  if the value is plaintext (no `enc:v1:` prefix), re-encrypts it under the
-  currently-configured `LICENSE_KEY_ENCRYPTION_KEY`.
-- Already-encrypted values are left untouched (the `is_encrypted` guard
-  makes this idempotent).
+Two modes:
+
+1) Default ("first encrypt" + idempotent re-run):
+   - Reads every row from `products`.
+   - For each of `private_key_pem`, `stripe_webhook_secret`, `stripe_api_key`,
+     if the value is plaintext (no `enc:v1:` prefix), encrypts it under
+     `LICENSE_KEY_ENCRYPTION_KEY`. Already-encrypted values pass through.
+   - Use after first turning on `LICENSE_KEY_ENCRYPTION_KEY` on a deploy
+     that previously ran without it.
+
+2) `--migrate-from-prev` (KEK rotation):
+   - Reads every row. For each encrypted field, decrypts under
+     `LICENSE_KEY_ENCRYPTION_KEY_PREV` and re-encrypts under
+     `LICENSE_KEY_ENCRYPTION_KEY`. Plaintext rows go through the default
+     "first encrypt" path under the new KEK.
+   - After a successful run, the operator removes
+     `LICENSE_KEY_ENCRYPTION_KEY_PREV` from the env and redeploys.
+   - No-op (and exits 0) when PREV == current.
 
 Why this exists:
-- The 8a336b18bca1 Alembic migration runs the same rewrap loop, but only
-  ONCE -- when the schema transitions from 9a9f5b6937d8 to 8a336b18bca1. If
-  the KEK wasn't configured at that moment (typical on a deploy that adopts
-  encryption AFTER the schema migration ran), the rows stay plaintext
-  forever, because the keystore doesn't lazy-rewrap on read (a read-time
-  rewrite would silently mutate the DB under the request handler, which is
-  worse than leaving the rows plaintext).
-
-When to use:
-- After setting `LICENSE_KEY_ENCRYPTION_KEY` in env on a deploy that
-  previously ran without it.
-- After rotating the KEK to a new value: first decrypt under the OLD KEK
-  (run with KEY set to the old one + flip `is_encrypted` semantics manually),
-  then run again with the NEW KEK. The two-step pattern is left to a
-  follow-up; for the common case (plaintext -> first encrypt), this script
-  is enough.
+- The 8a336b18bca1 Alembic migration runs the default rewrap loop, but only
+  ONCE -- when the schema transitions. If the KEK wasn't configured at that
+  moment, the rows stay plaintext forever, because the keystore doesn't
+  lazy-rewrap on read (a read-time rewrite would silently mutate the DB
+  under the request handler, which is worse than leaving rows plaintext).
+- Rotating the KEK without PREV migration would brick the deploy --
+  encrypted rows become un-decryptable.
 
 Safety:
-- Refuses to run if `LICENSE_KEY_ENCRYPTION_KEY` is unset (would be a no-op
-  AND mask the misconfig).
-- `--dry-run` prints what it would change without touching the DB. Use this
-  in prod first.
-- Wraps the whole loop in a single transaction. A mid-loop failure rolls
+- Refuses to run if `LICENSE_KEY_ENCRYPTION_KEY` is unset.
+- `--migrate-from-prev` refuses to run if PREV is unset.
+- `--dry-run` prints intent without touching the DB.
+- The whole loop runs in a single transaction; a mid-loop failure rolls
   back the entire batch.
 """
 from __future__ import annotations
@@ -45,15 +47,16 @@ import sys
 
 from app.config import get_settings
 from app.db import SessionLocal
-from app.keystore import encrypt_secret, is_encrypted
+from app.keystore import _decrypt_with, _fernet_prev, encrypt_secret, is_encrypted
 from app.models import Product
 
 log = logging.getLogger("license-server.rewrap")
 
 
 def _rewrap_field(value: str | None) -> tuple[str | None, bool]:
-    """Returns (new_value, changed). None passes through. Already-encrypted
-    values pass through unchanged. Plaintext values come back wrapped."""
+    """Default-mode rewrap: encrypt plaintext under the current KEK. Returns
+    (new_value, changed). None passes through. Already-encrypted values
+    pass through unchanged."""
     if value is None:
         return None, False
     if is_encrypted(value):
@@ -61,7 +64,19 @@ def _rewrap_field(value: str | None) -> tuple[str | None, bool]:
     return encrypt_secret(value), True
 
 
-def run(dry_run: bool = False) -> int:
+def _rewrap_field_migrate(value: str | None, prev) -> tuple[str | None, bool]:
+    """KEK-rotation rewrap: decrypt encrypted values under PREV then
+    re-encrypt under the current KEK. Plaintext values get encrypted under
+    the current KEK (same as the default path)."""
+    if value is None:
+        return None, False
+    if not is_encrypted(value):
+        return encrypt_secret(value), True
+    plaintext = _decrypt_with(prev, value)
+    return encrypt_secret(plaintext), True
+
+
+def run(dry_run: bool = False, migrate_from_prev: bool = False) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -74,19 +89,44 @@ def run(dry_run: bool = False) -> int:
         )
         return 2  # EX_USAGE-ish
 
+    prev = None
+    if migrate_from_prev:
+        if not s.key_encryption_key_prev:
+            log.error(
+                "--migrate-from-prev requires LICENSE_KEY_ENCRYPTION_KEY_PREV "
+                "to be set. Aborting."
+            )
+            return 2
+        if s.key_encryption_key_prev == s.key_encryption_key:
+            log.info(
+                "LICENSE_KEY_ENCRYPTION_KEY_PREV equals current KEK; "
+                "nothing to migrate. Exiting."
+            )
+            return 0
+        prev = _fernet_prev()
+        if prev is None:
+            log.error("LICENSE_KEY_ENCRYPTION_KEY_PREV failed to load; aborting.")
+            return 2
+
     db = SessionLocal()
     try:
         products = db.query(Product).all()
         log.info(
-            "found %d product row(s) -- scanning for plaintext secrets%s",
+            "found %d product row(s) -- %s%s",
             len(products),
+            "rotating from PREV KEK" if migrate_from_prev else "scanning for plaintext secrets",
             " (DRY RUN, no writes)" if dry_run else "",
         )
         total_changed = 0
         for p in products:
-            new_priv, priv_changed = _rewrap_field(p.private_key_pem)
-            new_ws, ws_changed = _rewrap_field(p.stripe_webhook_secret)
-            new_ak, ak_changed = _rewrap_field(p.stripe_api_key)
+            if migrate_from_prev:
+                new_priv, priv_changed = _rewrap_field_migrate(p.private_key_pem, prev)
+                new_ws, ws_changed = _rewrap_field_migrate(p.stripe_webhook_secret, prev)
+                new_ak, ak_changed = _rewrap_field_migrate(p.stripe_api_key, prev)
+            else:
+                new_priv, priv_changed = _rewrap_field(p.private_key_pem)
+                new_ws, ws_changed = _rewrap_field(p.stripe_webhook_secret)
+                new_ak, ak_changed = _rewrap_field(p.stripe_api_key)
             changes = []
             if priv_changed:
                 changes.append("private_key_pem")
@@ -95,9 +135,10 @@ def run(dry_run: bool = False) -> int:
             if ak_changed:
                 changes.append("stripe_api_key")
             if not changes:
-                log.info("  %s: all fields already encrypted", p.slug)
+                log.info("  %s: nothing to change", p.slug)
                 continue
-            log.info("  %s: will encrypt %s", p.slug, ", ".join(changes))
+            verb = "will re-wrap" if migrate_from_prev else "will encrypt"
+            log.info("  %s: %s %s", p.slug, verb, ", ".join(changes))
             if not dry_run:
                 p.private_key_pem = new_priv
                 p.stripe_webhook_secret = new_ws
@@ -111,6 +152,11 @@ def run(dry_run: bool = False) -> int:
             return 0
         db.commit()
         log.info("committed: %d product row(s) updated", total_changed)
+        if migrate_from_prev:
+            log.info(
+                "KEK rotation complete. Remove LICENSE_KEY_ENCRYPTION_KEY_PREV "
+                "from your env and redeploy."
+            )
         return 0
     except Exception:
         db.rollback()
@@ -126,8 +172,16 @@ def main() -> None:
         "--dry-run", action="store_true",
         help="Show what would change without writing.",
     )
+    parser.add_argument(
+        "--migrate-from-prev", action="store_true",
+        help=(
+            "Decrypt every encrypted row under LICENSE_KEY_ENCRYPTION_KEY_PREV "
+            "and re-encrypt under LICENSE_KEY_ENCRYPTION_KEY. Use during KEK "
+            "rotation."
+        ),
+    )
     args = parser.parse_args()
-    sys.exit(run(dry_run=args.dry_run))
+    sys.exit(run(dry_run=args.dry_run, migrate_from_prev=args.migrate_from_prev))
 
 
 if __name__ == "__main__":
