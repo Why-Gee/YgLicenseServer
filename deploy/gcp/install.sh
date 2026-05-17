@@ -29,6 +29,23 @@ ENV_DIR=/etc/yg-license-server
 DATA_DIR=/var/lib/yg-license-server
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Append a `KEY=VALUE` line to the env file IFF the key isn't already set.
+# Guarantees the file ends with a newline first (deploy.ps1's scp-then-tee
+# flow can leave the final line without one; without this guard a plain
+# `echo >>` glues the new key onto the previous value -- which corrupted
+# LICENSE_KEY_ENCRYPTION_KEY in v0.11.0). Idempotent.
+ensure_env_line() {
+  local key="$1" val="$2" file="$ENV_DIR/yg-license-server.env"
+  grep -q "^${key}=" "$file" && return 0
+  # If file is non-empty and doesn't end with a newline, add one before
+  # appending. `tail -c1` is the cheapest "what's the last byte?" probe.
+  if [ -s "$file" ] && [ "$(tail -c1 "$file" | wc -l)" -eq 0 ]; then
+    echo "" >> "$file"
+  fi
+  echo "${key}=${val}" >> "$file"
+  echo "    added ${key}=${val} to $file"
+}
+
 echo "==> apt update + base packages"
 apt-get update -y
 apt-get install -y --no-install-recommends \
@@ -98,11 +115,7 @@ echo "==> install license-server systemd unit"
 install -m 0644 "$SCRIPT_DIR/yg-license-server.service" /etc/systemd/system/yg-license-server.service
 
 # Make sure IMAGE is in the env file (since the unit reads it from there).
-# Idempotent: if IMAGE is already set, leave it alone.
-if ! grep -q '^IMAGE=' "$ENV_DIR/yg-license-server.env"; then
-  echo "IMAGE=$IMAGE" >> "$ENV_DIR/yg-license-server.env"
-  echo "    added IMAGE=$IMAGE to $ENV_DIR/yg-license-server.env"
-fi
+ensure_env_line "IMAGE" "$IMAGE"
 
 echo "==> install duckdns updater"
 install -m 0755 "$SCRIPT_DIR/duckdns-update.sh" /usr/local/bin/duckdns-update.sh
@@ -116,25 +129,40 @@ echo "==> GCS backup bucket + lifecycle"
 command -v gcloud >/dev/null || { echo "ERROR: gcloud not on PATH; cannot configure backups" >&2; exit 1; }
 command -v gsutil >/dev/null || { echo "ERROR: gsutil not on PATH; cannot configure backups" >&2; exit 1; }
 
-# Idempotent: `gsutil ls -b` exits non-zero when the bucket doesn't exist.
-if ! gsutil -q ls -b "gs://${BACKUP_BUCKET}" >/dev/null 2>&1; then
-  echo "    creating gs://${BACKUP_BUCKET} in ${GCP_REGION}"
-  gcloud storage buckets create "gs://${BACKUP_BUCKET}" \
-    --project="${GCP_PROJECT}" \
-    --location="${GCP_REGION}" \
-    --default-storage-class=STANDARD \
-    --uniform-bucket-level-access
+# Bucket lifecycle: create + versioning + lifecycle + IAM are all
+# admin-level ops. On a GCE VM whose default service account only has
+# `devstorage.read_write` scope (the default for e2-micro images), these
+# calls return 403. They MUST be run from a workstation with broader
+# auth -- typically the laptop where you have `gcloud auth login` as the
+# project owner -- BEFORE running install.sh. SKIP_GCS_SETUP=1 short-
+# circuits this section so install.sh is rerunnable on the VM.
+#
+# The probe distinguishes "first install on this VM" from "rerun":
+# `gsutil ls -b` against a missing bucket returns 1, and we still want
+# to fail loud in that case (so the operator notices they need to do
+# the laptop-side setup first). Once the bucket exists, the rest of the
+# section is idempotent metadata work; we attempt it and tolerate 403
+# (already configured by an earlier laptop-side run).
+if [ "${SKIP_GCS_SETUP:-0}" = "1" ]; then
+  echo "==> GCS backup bucket setup skipped (SKIP_GCS_SETUP=1)"
+elif ! gsutil -q ls -b "gs://${BACKUP_BUCKET}" >/dev/null 2>&1; then
+  echo "ERROR: gs://${BACKUP_BUCKET} does not exist and the VM's default" >&2
+  echo "service account cannot create buckets. Run this once from a" >&2
+  echo "workstation with project-owner gcloud auth:" >&2
+  echo "  gcloud storage buckets create gs://${BACKUP_BUCKET} \\" >&2
+  echo "    --project=${GCP_PROJECT} --location=${GCP_REGION} \\" >&2
+  echo "    --default-storage-class=STANDARD --uniform-bucket-level-access" >&2
+  echo "  gcloud storage buckets update gs://${BACKUP_BUCKET} --versioning" >&2
+  echo "  # then apply lifecycle from the JSON in install.sh and re-run." >&2
+  echo "Or re-run install.sh with SKIP_GCS_SETUP=1 to defer setup." >&2
+  exit 1
 else
-  echo "    gs://${BACKUP_BUCKET} already exists"
-fi
+  echo "==> GCS backup bucket already exists; applying versioning + lifecycle + IAM if allowed"
+  gcloud storage buckets update "gs://${BACKUP_BUCKET}" --versioning 2>/dev/null \
+    || echo "    (versioning update skipped -- already set or insufficient scope)"
 
-# Versioning gives us "30 daily snapshots" semantics with one stable object
-# name, so the backup script doesn't need to think about per-day naming.
-gcloud storage buckets update "gs://${BACKUP_BUCKET}" --versioning
-
-# Lifecycle policy: delete non-current (versioned) objects older than N days.
-LIFECYCLE_JSON="$(mktemp)"
-cat > "$LIFECYCLE_JSON" <<JSON
+  LIFECYCLE_JSON="$(mktemp)"
+  cat > "$LIFECYCLE_JSON" <<JSON
 {
   "lifecycle": {
     "rule": [
@@ -150,22 +178,27 @@ cat > "$LIFECYCLE_JSON" <<JSON
   }
 }
 JSON
-gcloud storage buckets update "gs://${BACKUP_BUCKET}" --lifecycle-file="$LIFECYCLE_JSON"
-rm -f "$LIFECYCLE_JSON"
+  gcloud storage buckets update "gs://${BACKUP_BUCKET}" --lifecycle-file="$LIFECYCLE_JSON" 2>/dev/null \
+    || echo "    (lifecycle update skipped -- already set or insufficient scope)"
+  rm -f "$LIFECYCLE_JSON"
 
-# Grant the VM's default service account write access to the bucket only
-# (not project-wide). Re-running is idempotent: gcloud add-iam-policy-binding
-# is a no-op when the binding already exists.
-VM_SA="$(curl -sS -H 'Metadata-Flavor: Google' \
-  http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email || true)"
-if [ -n "$VM_SA" ]; then
-  echo "    granting roles/storage.objectAdmin on bucket to ${VM_SA}"
-  gcloud storage buckets add-iam-policy-binding "gs://${BACKUP_BUCKET}" \
-    --member="serviceAccount:${VM_SA}" \
-    --role="roles/storage.objectAdmin" >/dev/null
-else
-  echo "    WARN: could not read VM service account from metadata; skipping IAM grant"
+  VM_SA="$(curl -sS -H 'Metadata-Flavor: Google' \
+    http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email || true)"
+  if [ -n "$VM_SA" ]; then
+    gcloud storage buckets add-iam-policy-binding "gs://${BACKUP_BUCKET}" \
+      --member="serviceAccount:${VM_SA}" \
+      --role="roles/storage.objectAdmin" >/dev/null 2>&1 \
+      && echo "    granted roles/storage.objectAdmin to ${VM_SA}" \
+      || echo "    (IAM binding skipped -- already set or insufficient scope)"
+  fi
 fi
+
+# gsutil caches the GCE metadata-server token in /root/.gsutil/gcecredcache.
+# When the VM's OAuth scopes change (e.g. operator added devstorage.read_write
+# to unbreak backups), the cached token retains the OLD scopes and uploads
+# 403 until the cache is cleared. Wipe it on every install -- it's a free
+# refresh.
+rm -f /root/.gsutil/gcecredcache /root/.gsutil/credstore2 2>/dev/null || true
 
 echo "==> install backup script + systemd units"
 install -m 0755 "$SCRIPT_DIR/backup.sh" /usr/local/bin/yg-license-backup.sh
@@ -173,10 +206,8 @@ install -m 0644 "$SCRIPT_DIR/yg-license-backup.service" /etc/systemd/system/yg-l
 install -m 0644 "$SCRIPT_DIR/yg-license-backup.timer"   /etc/systemd/system/yg-license-backup.timer
 
 # Surface the bucket name in the env file so backup.sh + future ops scripts
-# read the same value. Idempotent guard.
-if ! grep -q '^BACKUP_BUCKET=' "$ENV_DIR/yg-license-server.env"; then
-  echo "BACKUP_BUCKET=$BACKUP_BUCKET" >> "$ENV_DIR/yg-license-server.env"
-fi
+# read the same value.
+ensure_env_line "BACKUP_BUCKET" "$BACKUP_BUCKET"
 
 echo "==> systemctl daemon-reload + enable + start"
 systemctl daemon-reload

@@ -314,6 +314,12 @@ function Push-ProdEnv {
     # rolled back manually.
     $err = Test-ProdEnvFile $PROD_ENV_PATH
     if ($err) { throw "validation failed: $err" }
+    # Normalize the file: guarantee a trailing newline. install.sh
+    # idempotent-appends like `IMAGE=` and `BACKUP_BUCKET=` glue onto the
+    # last line otherwise (which corrupted LICENSE_KEY_ENCRYPTION_KEY on
+    # one v0.11.0 install). Round-trip through Write-EnvLines so the same
+    # POSIX normalization (LF endings, terminating \n) gets applied.
+    Write-EnvLines $PROD_ENV_PATH (Read-EnvLines $PROD_ENV_PATH)
     Write-Host "==> pushing $PROD_ENV_PATH to VM..."
     Invoke-VmScp $PROD_ENV_PATH '/tmp/yg-license-env.new'
     $ts = Get-Date -Format 'yyyyMMddHHmmss'
