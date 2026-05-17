@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi import status as http_status
 from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -70,6 +72,11 @@ def _validate_secrets_at_boot() -> None:
 
 
 app = FastAPI(title="YgLicenseServer", version=__version__, lifespan=lifespan)
+app.mount(
+    "/static",
+    StaticFiles(directory=Path(__file__).parent / "static"),
+    name="static",
+)
 app.include_router(api_router)
 app.include_router(stripe_router)
 for _r in ADMIN_UI_ROUTERS:
