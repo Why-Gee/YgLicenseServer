@@ -44,6 +44,17 @@ def _login(client: TestClient) -> dict[str, str]:
     return {"asm_ls_session": r.cookies["asm_ls_session"]}
 
 
+def _csrf(cookies: dict[str, str]) -> str:
+    from app.config import get_settings
+    from app.security import csrf_token
+    return csrf_token(get_settings().session_secret, cookies["asm_ls_session"])
+
+
+def _issue_form(cookies, **fields) -> dict:
+    """Build a license-issue form dict with the CSRF token baked in."""
+    return {**fields, "csrf_token": _csrf(cookies)}
+
+
 def _create_product(client: TestClient) -> None:
     r = client.post(
         "/v1/admin/products",
@@ -66,14 +77,13 @@ def test_issue_form_persists_customer_name(client: TestClient) -> None:
     cookies = _login(client)
     r = client.post(
         "/admin/products/asm/licenses",
-        data={
-            "email": "buyer@example.com",
-            "customer_name": "Acme Animal Shelter",
-            "plan": "standard",
-            "max_users": "10",
-            "valid_days": "30",
-            "features_json": "{}",
-        },
+        data=_issue_form(
+            cookies,
+            email="buyer@example.com",
+            customer_name="Acme Animal Shelter",
+            plan="standard", max_users="10", valid_days="30",
+            features_json="{}",
+        ),
         cookies=cookies, follow_redirects=False,
     )
     assert r.status_code == 303, r.text
@@ -85,13 +95,12 @@ def test_issue_form_blank_name_stays_null(client: TestClient) -> None:
     cookies = _login(client)
     r = client.post(
         "/admin/products/asm/licenses",
-        data={
-            "email": "buyer@example.com",
-            "plan": "standard",
-            "max_users": "10",
-            "valid_days": "30",
-            "features_json": "{}",
-        },
+        data=_issue_form(
+            cookies,
+            email="buyer@example.com",
+            plan="standard", max_users="10", valid_days="30",
+            features_json="{}",
+        ),
         cookies=cookies, follow_redirects=False,
     )
     assert r.status_code == 303
@@ -106,6 +115,7 @@ def test_issue_form_overwrites_existing_name_when_supplied(client: TestClient) -
     base = {
         "email": "buyer@example.com", "plan": "standard",
         "max_users": "10", "valid_days": "30", "features_json": "{}",
+        "csrf_token": _csrf(cookies),
     }
     client.post(
         "/admin/products/asm/licenses",
@@ -126,6 +136,7 @@ def test_issue_form_blank_name_does_not_wipe_existing(client: TestClient) -> Non
     base = {
         "email": "buyer@example.com", "plan": "standard",
         "max_users": "10", "valid_days": "30", "features_json": "{}",
+        "csrf_token": _csrf(cookies),
     }
     client.post(
         "/admin/products/asm/licenses",
@@ -148,14 +159,12 @@ def test_edit_form_updates_customer_name(client: TestClient) -> None:
     cookies = _login(client)
     r = client.post(
         "/admin/products/asm/licenses",
-        data={
-            "email": "buyer@example.com",
-            "customer_name": "Original",
-            "plan": "standard",
-            "max_users": "10",
-            "valid_days": "30",
-            "features_json": "{}",
-        },
+        data=_issue_form(
+            cookies,
+            email="buyer@example.com", customer_name="Original",
+            plan="standard", max_users="10", valid_days="30",
+            features_json="{}",
+        ),
         cookies=cookies, follow_redirects=False,
     )
     lid = r.headers["location"].rsplit("issued=", 1)[1]
@@ -175,6 +184,7 @@ def test_edit_form_updates_customer_name(client: TestClient) -> None:
             "plan": plan, "max_users": str(max_users),
             "valid_until": valid_until_str, "features_json": "{}",
             "customer_name": "Renamed Customer",
+            "csrf_token": _csrf(cookies),
         },
         cookies=cookies, follow_redirects=False,
     )
@@ -188,6 +198,7 @@ def test_edit_form_updates_customer_name(client: TestClient) -> None:
             "plan": plan, "max_users": str(max_users),
             "valid_until": valid_until_str, "features_json": "{}",
             "customer_name": "",
+            "csrf_token": _csrf(cookies),
         },
         cookies=cookies, follow_redirects=False,
     )
@@ -202,14 +213,13 @@ def test_product_detail_renders_name_column_and_modal_field(client: TestClient) 
     cookies = _login(client)
     client.post(
         "/admin/products/asm/licenses",
-        data={
-            "email": "buyer@example.com",
-            "customer_name": "Acme Animal Shelter",
-            "plan": "standard",
-            "max_users": "10",
-            "valid_days": "30",
-            "features_json": "{}",
-        },
+        data=_issue_form(
+            cookies,
+            email="buyer@example.com",
+            customer_name="Acme Animal Shelter",
+            plan="standard", max_users="10", valid_days="30",
+            features_json="{}",
+        ),
         cookies=cookies, follow_redirects=False,
     )
     r = client.get("/admin/products/asm", cookies=cookies)
@@ -234,14 +244,12 @@ def test_admin_list_licenses_includes_customer_name(client: TestClient) -> None:
     cookies = _login(client)
     client.post(
         "/admin/products/asm/licenses",
-        data={
-            "email": "buyer@example.com",
-            "customer_name": "Acme",
-            "plan": "standard",
-            "max_users": "10",
-            "valid_days": "30",
-            "features_json": "{}",
-        },
+        data=_issue_form(
+            cookies,
+            email="buyer@example.com", customer_name="Acme",
+            plan="standard", max_users="10", valid_days="30",
+            features_json="{}",
+        ),
         cookies=cookies, follow_redirects=False,
     )
     r = client.get(

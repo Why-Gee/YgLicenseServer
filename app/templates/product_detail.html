@@ -23,8 +23,9 @@
 <div class="error">test webhook failed (HTTP {{ request.query_params.get('webhook_test_status') or 'no response' }}). check the receiver and the engine log for details.</div>
 {% endif %}
 {% endif %}
-{% if request.query_params.get('error') %}
-<div class="error">{{ request.query_params.get('error') }}</div>
+{% set _err = error_message(request.query_params.get('error')) %}
+{% if _err %}
+<div class="error">{{ _err }}</div>
 {% endif %}
 
 <div class="card">
@@ -63,6 +64,7 @@
         data-confirm2-title="Are you sure?"
         data-confirm2-body="This cannot be undone. Click Delete to permanently remove {n} license(s)."
         data-confirm2-label="Delete {n} license(s)">
+    {{ csrf_input(request) }}
     <p style="margin:0 0 .5em;">
       <button data-bulk-btn type="submit" class="btn danger" style="display:none">
         Delete <span data-bulk-count>0</span> Selected
@@ -159,7 +161,7 @@
       "customer_name": {{ (lic.customer.name or '')|tojson }},
       "plan": {{ lic.plan|tojson }},
       "max_users": {{ lic.max_users }},
-      "valid_until": "{{ lic.valid_until.strftime('%Y-%m-%d') }}",
+      "valid_until": "{{ lic.valid_until.strftime('%Y-%m-%dT%H:%M') }}",
       "features_json": {{ (lic.features|tojson)|tojson }},
       "status": {{ lic.status|tojson }},
       "webhook_url": {{ (lic.webhook_url or '')|tojson }},
@@ -201,6 +203,7 @@
     {% endif %}
     <h3 id="lm-title" style="margin-top:0;">Issue License</h3>
     <form id="lm-form" method="post" style="display:grid;grid-template-columns:1fr 1fr;gap:.5em 1em;">
+      {{ csrf_input(request) }}
       <div id="lm-key-row" style="display:none;grid-column:1/-1;">
         <label>Key</label>
         <pre id="lm-key" style="font-size:.85em;margin:0;"></pre>
@@ -216,7 +219,7 @@
       <div><label>Plan</label><input id="lm-plan" name="plan" required></div>
       <div><label>Max Users</label><input id="lm-max-users" name="max_users" type="number" min="1" required></div>
       <div id="lm-valid-days-wrap"><label>Valid Days</label><input id="lm-valid-days" name="valid_days" type="number" value="365" min="1"></div>
-      <div id="lm-valid-until-wrap" style="display:none;"><label>Valid Until</label><input id="lm-valid-until" name="valid_until" type="date"></div>
+      <div id="lm-valid-until-wrap" style="display:none;"><label>Valid Until</label><input id="lm-valid-until" name="valid_until" type="datetime-local"></div>
       <div style="grid-column:1/-1;">
         <label>Features (JSON)</label>
         <input id="lm-features" name="features_json" placeholder='{"chat_agent":true,"no_ads":false}'>

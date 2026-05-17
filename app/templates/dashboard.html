@@ -10,8 +10,9 @@
   audit trail preserved in events.
 </div>
 {% endif %}
-{% if request.query_params.get('error') %}
-<div class="error">{{ request.query_params.get('error') }}</div>
+{% set _err = error_message(request.query_params.get('error')) %}
+{% if _err %}
+<div class="error">{{ _err }}</div>
 {% endif %}
 
 <div class="grid">

@@ -3,15 +3,20 @@
 No-op when RESEND_API_KEY is unset — keeps tests + dev unaffected.
 Best-effort: failures are logged but never raised, so a transient email
 outage doesn't break license issuance.
+
+Uses the shared httpx client (redirects disabled). Resend's API never
+needs a redirect; if it ever does, we'd rather see the 301 in the log
+than silently follow it.
 """
 from __future__ import annotations
 
-import json
 import logging
-import urllib.error
-import urllib.request
+from email.utils import formataddr
+
+import httpx
 
 from app.config import get_settings
+from app.http_client import get_client
 
 log = logging.getLogger("license-server.email")
 
@@ -31,33 +36,32 @@ def send_license_email(*, to: str, key: str, product_name: str) -> bool:
         "subject": f"Your {product_name} license key",
         "text": _text_body(product_name=product_name, key=key),
     }
-    body = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        _API,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {s.resend_api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if 200 <= resp.status < 300:
-                log.info("email sent to %s for %s (resend status=%s)", to, product_name, resp.status)
-                return True
-            log.warning("resend returned %s for %s", resp.status, to)
-            return False
-    except urllib.error.HTTPError as e:
-        log.warning("resend HTTPError %s for %s: %s", e.code, to, e.read()[:500])
-        return False
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        r = get_client().post(
+            _API,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {s.resend_api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=10.0,
+        )
+    except httpx.HTTPError as e:
         log.warning("resend send failed for %s: %s", to, e)
         return False
 
+    if 200 <= r.status_code < 300:
+        log.info("email sent to %s for %s (resend status=%s)", to, product_name, r.status_code)
+        return True
+    log.warning("resend returned %s for %s: %s", r.status_code, to, r.text[:500])
+    return False
+
 
 def _format_from(addr: str, product_name: str) -> str:
-    return f"{product_name} <{addr}>"
+    """RFC-5322 formatted From with the product name as the display name.
+    Uses email.utils.formataddr so unusual characters in product_name don't
+    blow up the header."""
+    return formataddr((product_name, addr))
 
 
 def _text_body(*, product_name: str, key: str) -> str:

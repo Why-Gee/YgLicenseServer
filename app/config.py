@@ -16,6 +16,10 @@ class Settings(BaseModel):
     cookie_secure: bool = True         # set false only for local http://
     resend_api_key: str = ""           # if unset, license emails are skipped (logged only)
     email_from: str = "onboarding@resend.dev"  # Resend test sender; replace once domain verified
+    # Fernet key (url-safe base64 32-byte) that wraps each product's Ed25519
+    # private_key_pem in the DB. Unset -> private keys stored plaintext (legacy
+    # behavior). See app.keystore for the envelope format.
+    key_encryption_key: str = ""
 
 
 @lru_cache(maxsize=1)
@@ -28,4 +32,5 @@ def get_settings() -> Settings:
         cookie_secure=os.environ.get("COOKIE_SECURE", "true").lower() in ("1", "true", "yes"),
         resend_api_key=os.environ.get("RESEND_API_KEY", ""),
         email_from=os.environ.get("EMAIL_FROM", "onboarding@resend.dev"),
+        key_encryption_key=os.environ.get("LICENSE_KEY_ENCRYPTION_KEY", ""),
     )

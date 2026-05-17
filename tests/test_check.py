@@ -1,29 +1,12 @@
-"""End-to-end tests against in-memory SQLite + product-scoped admin endpoints."""
-from __future__ import annotations
+"""End-to-end tests against in-memory SQLite + product-scoped admin endpoints.
 
-import importlib
+`client` fixture comes from conftest.py.
+"""
+from __future__ import annotations
 
 import jwt as jwt_lib
 import pytest
 from fastapi.testclient import TestClient
-
-
-@pytest.fixture
-def client(tmp_path, monkeypatch) -> TestClient:
-    db_path = tmp_path / "license.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
-    monkeypatch.setenv("ADMIN_TOKEN", "test-admin")
-    monkeypatch.setenv("SESSION_SECRET", "test-admin")
-    monkeypatch.setenv("COOKIE_SECURE", "false")
-
-    import app.config as cfg
-    import app.db as db
-    importlib.reload(cfg)
-    importlib.reload(db)
-    import app.main as m
-    importlib.reload(m)
-    db.init_db()  # lifespan only runs under `with TestClient(...)`; create tables explicitly
-    return TestClient(m.app)
 
 
 def _create_product(client: TestClient, slug: str = "asm", prefix: str = "asm") -> dict:

@@ -14,8 +14,14 @@ COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 RUN pip install --upgrade pip && pip install -e .
 
-# SQLite default lives here; bind-mount a volume to /data in compose for persistence.
-RUN mkdir -p /data
+# SQLite default lives here; bind-mount a volume to /data in compose for
+# persistence. Owned by the unprivileged `app` user so uvicorn (running as
+# that uid) can write the DB file without root in the container.
+RUN useradd --system --uid 10001 --home /srv --shell /usr/sbin/nologin app \
+    && mkdir -p /data \
+    && chown -R app:app /srv /data
+
+USER app
 
 EXPOSE 8800
 ENTRYPOINT ["/srv/docker-entrypoint.sh"]

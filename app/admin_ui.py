@@ -7,15 +7,20 @@ logic as /v1/admin/* — kept in api.py for the JSON consumers.
 """
 from __future__ import annotations
 
+import csv
+import io
+import json
 import logging
 import secrets
-from datetime import datetime, timedelta
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from itsdangerous import BadSignature, URLSafeSerializer
+from markupsafe import Markup
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -23,7 +28,9 @@ from app import __version__
 from app import webhooks as wh
 from app.config import get_settings
 from app.db import get_db
+from app.keystore import encrypt_pem
 from app.models import Customer, Event, Install, License, Product
+from app.security import check_admin_bearer, check_csrf, csrf_token, is_safe_url_shape
 from app.signing import generate_keypair
 
 log = logging.getLogger("license-server.admin")
@@ -34,8 +41,60 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 # Make __version__ available to all templates without threading through every
 # TemplateResponse context dict.
 templates.env.globals["app_version"] = __version__
+# `{{ csrf_input() }}` in any template renders a hidden input bound to the
+# current request's session cookie. Defined here (not as a context var) so
+# every TemplateResponse picks it up without per-handler plumbing.
+templates.env.globals["csrf_input"] = lambda request: Markup(
+    f'<input type="hidden" name="csrf_token" value="{_current_csrf_token(request) or ""}">'
+)
+
+# Whitelist of admin-UI error codes -> human-readable messages. Templates
+# render `{{ error_message(request.query_params.get('error')) }}` so a
+# crafted ?error=<script> can't even show as raw text (autoescape protects
+# from XSS, but the visual is still better when constrained to known msgs).
+_ERROR_MESSAGES = {
+    "slug exists": "A product with that slug already exists.",
+    "invalid features json": "Features JSON was not a valid object.",
+    "invalid valid_until": "Could not parse Valid Until date.",
+    "no products selected": "No products were selected.",
+    "no licenses selected": "No licenses were selected.",
+    "no webhook configured": "This license has no webhook URL configured.",
+    "unsafe webhook url": (
+        "Webhook URL refused by SSRF guard "
+        "(private/loopback/internal host or non-http(s) scheme)."
+    ),
+    "email required": "Email is required.",
+    "email already used by another customer": "That email is already used by another customer.",
+}
+
+
+def _error_message(code: str | None) -> str | None:
+    """Look up an error code (passed via ?error=) in the whitelist. Unknown
+    or missing codes return None, so the template hides the banner instead
+    of echoing the raw URL parameter."""
+    if not code:
+        return None
+    # URL-decoded form params arrive as 'foo bar'; the redirect helpers use
+    # '+' which httpx/browsers convert to space. Look up both shapes.
+    return _ERROR_MESSAGES.get(code) or _ERROR_MESSAGES.get(code.replace("+", " "))
+
+
+templates.env.globals["error_message"] = _error_message
 
 SESSION_COOKIE = "asm_ls_session"
+SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
+
+
+class _LoginRequired(Exception):
+    """Raised by handlers when an unauthenticated visitor hits an admin page.
+    Caught by an exception handler registered in app.main that returns a
+    303 RedirectResponse — keeps each handler free of the redirect-return
+    plumbing while emitting a real redirect (not a JSON HTTPException body).
+    """
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _serializer() -> URLSafeSerializer:
@@ -50,15 +109,49 @@ def _logged_in(request: Request) -> bool:
     if not raw:
         return False
     try:
-        _serializer().loads(raw)
-        return True
+        data = _serializer().loads(raw)
     except BadSignature:
         return False
+    # Reject ancient cookies even if the signature is still valid. Stolen
+    # cookies become useless after SESSION_MAX_AGE_SECONDS instead of
+    # surviving until SESSION_SECRET rotates (which would log everyone out).
+    iat = data.get("iat") if isinstance(data, dict) else None
+    if not isinstance(iat, int):
+        return False
+    if int(time.time()) - iat > SESSION_MAX_AGE_SECONDS:
+        return False
+    return True
 
 
 def _require_login(request: Request) -> None:
     if not _logged_in(request):
-        raise HTTPException(status_code=303, headers={"location": "/admin/login"})
+        raise _LoginRequired()
+
+
+def _current_csrf_token(request: Request) -> str | None:
+    """Derive the expected CSRF token for the request's session cookie. Used
+    by templates (via Jinja global `csrf_token`) to render the hidden input.
+    Returns None when there's no session cookie -- the login page renders
+    without a CSRF guard (POST to /admin/login is exempt; it's the bootstrap)."""
+    raw = request.cookies.get(SESSION_COOKIE)
+    if not raw:
+        return None
+    s = get_settings()
+    if not s.session_secret:
+        return None
+    return csrf_token(s.session_secret, raw)
+
+
+def _require_csrf(request: Request, supplied: str | None) -> None:
+    """Verify the CSRF token on a state-changing form POST. Raises 403 on
+    mismatch. Pulled out so every destructive handler can call it with one
+    line; FastAPI Form() captures the value off the form body."""
+    raw = request.cookies.get(SESSION_COOKIE)
+    s = get_settings()
+    if not raw or not s.session_secret or not check_csrf(s.session_secret, raw, supplied):
+        client = request.client.host if request.client else "?"
+        log.warning("CSRF mismatch on %s from %s", request.url.path, client)
+        raise HTTPException(status_code=403, detail="invalid CSRF token")
 
 
 # ----- login flow --------------------------------------------------------
@@ -82,18 +175,19 @@ def login(request: Request, token: str = Form(...)) -> Response:
         raise HTTPException(status_code=503, detail="ADMIN_TOKEN not set")
     if not secrets.compare_digest(token, s.admin_token):
         return RedirectResponse("/admin/login?error=invalid", status_code=303)
-    cookie = _serializer().dumps({"ok": True})
+    cookie = _serializer().dumps({"ok": True, "iat": int(time.time())})
     resp = RedirectResponse("/admin", status_code=303)
     resp.set_cookie(
         SESSION_COOKIE, cookie,
         httponly=True, secure=s.cookie_secure, samesite="lax",
-        max_age=60 * 60 * 24 * 7,  # 7 days
+        max_age=SESSION_MAX_AGE_SECONDS,
     )
     return resp
 
 
 @router.post("/admin/logout")
-def logout() -> Response:
+def logout(request: Request, csrf_token: str = Form("")) -> Response:
+    _require_csrf(request, csrf_token)
     resp = RedirectResponse("/admin/login", status_code=303)
     resp.delete_cookie(SESSION_COOKIE)
     return resp
@@ -152,9 +246,11 @@ def product_create(
     key_prefix: str = Form(...),
     description: str = Form(""),
     jwt_issuer: str = Form(""),
+    csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ) -> Response:
     _require_login(request)
+    _require_csrf(request, csrf_token)
     if db.query(Product).filter_by(slug=slug).one_or_none():
         return RedirectResponse(
             "/admin/products/new?error=slug+exists", status_code=303
@@ -165,7 +261,7 @@ def product_create(
         name=name,
         description=description or None,
         public_key_pem=pub_pem,
-        private_key_pem=priv_pem,
+        private_key_pem=encrypt_pem(priv_pem),
         key_prefix=key_prefix,
         jwt_issuer=jwt_issuer or f"{slug}-license-server",
     )
@@ -175,7 +271,7 @@ def product_create(
     return RedirectResponse(f"/admin/products/{slug}", status_code=303)
 
 
-def _delete_product(db: Session, p: Product) -> int:
+def _delete_product(db: Session, p: Product, bg: BackgroundTasks | None) -> int:
     """Delete a product and everything under it. Returns license count killed.
 
     Customers are NOT deleted (they may own licenses for other products on
@@ -185,7 +281,7 @@ def _delete_product(db: Session, p: Product) -> int:
     licenses = db.query(License).filter_by(product_id=p.id).all()
     license_count = len(licenses)
     for lic in licenses:
-        _delete_license(db, lic)
+        _delete_license(db, lic, bg)
     db.add(Event(
         type="product:deleted",
         payload={
@@ -200,13 +296,18 @@ def _delete_product(db: Session, p: Product) -> int:
 
 
 @router.post("/admin/products/{slug}/delete")
-def product_delete_one(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
+def product_delete_one(
+    slug: str, request: Request, bg: BackgroundTasks,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
     """Single-row delete (trash-icon path)."""
     _require_login(request)
+    _require_csrf(request, csrf_token)
     p = db.query(Product).filter_by(slug=slug).one_or_none()
     if p is None:
         raise HTTPException(status_code=404)
-    license_count = _delete_product(db, p)
+    license_count = _delete_product(db, p, bg)
     db.commit()
     return RedirectResponse(
         f"/admin?deleted_products=1&deleted_licenses={license_count}",
@@ -217,10 +318,13 @@ def product_delete_one(slug: str, request: Request, db: Session = Depends(get_db
 @router.post("/admin/products/delete")
 def products_bulk_delete(
     request: Request,
+    bg: BackgroundTasks,
     product_slugs: list[str] = Form(default=[]),
+    csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ) -> Response:
     _require_login(request)
+    _require_csrf(request, csrf_token)
     if not product_slugs:
         return RedirectResponse("/admin?error=no+products+selected", status_code=303)
     deleted_products = 0
@@ -229,7 +333,7 @@ def products_bulk_delete(
         p = db.query(Product).filter_by(slug=slug).one_or_none()
         if p is None:
             continue
-        deleted_licenses += _delete_product(db, p)
+        deleted_licenses += _delete_product(db, p, bg)
         deleted_products += 1
     db.commit()
     return RedirectResponse(
@@ -284,10 +388,11 @@ def license_issue(
     valid_days: int = Form(365),
     features_json: str = Form("{}"),
     webhook_url: str = Form(""),
+    csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ) -> Response:
     _require_login(request)
-    import json
+    _require_csrf(request, csrf_token)
     p = db.query(Product).filter_by(slug=slug).one_or_none()
     if p is None:
         raise HTTPException(status_code=404)
@@ -313,6 +418,10 @@ def license_issue(
         cust.name = name_clean
     key = f"{p.key_prefix}_" + secrets.token_urlsafe(32)
     webhook_url_clean = webhook_url.strip() or None
+    if webhook_url_clean and not is_safe_url_shape(webhook_url_clean, allow_http=True):
+        return RedirectResponse(
+            f"/admin/products/{slug}?error=unsafe+webhook+url", status_code=303
+        )
     webhook_secret_value = wh.generate_secret() if webhook_url_clean else None
     lic = License(
         product_id=p.id,
@@ -321,7 +430,7 @@ def license_issue(
         plan=plan,
         max_users=max_users,
         features=features,
-        valid_until=datetime.utcnow() + timedelta(days=valid_days),
+        valid_until=_utcnow() + timedelta(days=valid_days),
         status="active",
         webhook_url=webhook_url_clean,
         webhook_secret=webhook_secret_value,
@@ -371,6 +480,7 @@ def _apply_webhook_config(
 def license_edit(
     lid: str,
     request: Request,
+    bg: BackgroundTasks,
     plan: str = Form(...),
     max_users: int = Form(...),
     valid_until: str = Form(...),
@@ -378,6 +488,7 @@ def license_edit(
     features_json: str = Form("{}"),
     webhook_url: str = Form(""),
     rotate_secret: str = Form(""),
+    csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ) -> Response:
     """Edit an existing license — plan / max_users / valid_until / features
@@ -385,7 +496,7 @@ def license_edit(
     Same redirect contract as /webhook update so the secret is shown once
     when set or rotated."""
     _require_login(request)
-    import json
+    _require_csrf(request, csrf_token)
     lic = db.query(License).filter_by(id=lid).one_or_none()
     if lic is None:
         raise HTTPException(status_code=404)
@@ -432,6 +543,11 @@ def license_edit(
         changed.append("customer_name")
     lic.customer.name = customer_name.strip() or None
     new_url = webhook_url.strip() or None
+    if new_url and not is_safe_url_shape(new_url, allow_http=True):
+        return RedirectResponse(
+            f"/admin/products/{lic.product.slug}?error=unsafe+webhook+url",
+            status_code=303,
+        )
     # Single source of truth -- same helper the dedicated /webhook handler
     # and the JSON API path call. mint_on_url_change=True preserves the
     # form-handler convention that changing the URL implicitly rotates.
@@ -448,14 +564,23 @@ def license_edit(
     ))
     db.commit()
     # Push a `license.updated` event so receivers (e.g. ASM) refresh their
-    # cached JWT without waiting for the next phone-home interval. We don't
-    # care about delivery success here -- the receiver's normal poll is the
-    # safety net.
-    if changed:
-        try:
-            wh.deliver_update(license_obj=lic, changed_fields=changed)
-        except Exception as e:  # noqa: BLE001
-            log.warning("post-edit deliver_update failed: %s", e)
+    # cached JWT without waiting for the next phone-home interval. Dispatched
+    # via BackgroundTasks so a slow receiver doesn't pin the admin save.
+    if changed and lic.webhook_url and lic.webhook_secret:
+        data = {
+            "license_id": lic.id,
+            "license_key": lic.key,
+            "key": lic.key,
+            "product_slug": lic.product.slug if lic.product else None,
+            "customer_email": lic.customer.email if lic.customer else None,
+            "status": lic.status,
+            "changed_fields": list(changed),
+        }
+        bg.add_task(
+            wh.deliver,
+            url=lic.webhook_url, secret=lic.webhook_secret,
+            event_type=wh.EVENT_UPDATED, data=data,
+        )
     # webhook_lid query param triggers the modal to auto-open with the secret
     # pre revealed when one was set/rotated; otherwise just `edited` so the
     # banner shows but the modal stays closed.
@@ -471,16 +596,23 @@ def license_webhook_update(
     request: Request,
     webhook_url: str = Form(""),
     rotate_secret: str = Form(""),
+    csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ) -> Response:
     """Set / change / clear the webhook URL on an existing license.
     `rotate_secret=1` regenerates the signing secret (use after the customer
     rotates their receiver key)."""
     _require_login(request)
+    _require_csrf(request, csrf_token)
     lic = db.query(License).filter_by(id=lid).one_or_none()
     if lic is None:
         raise HTTPException(status_code=404)
     new_url = webhook_url.strip() or None
+    if new_url and not is_safe_url_shape(new_url, allow_http=True):
+        return RedirectResponse(
+            f"/admin/products/{lic.product.slug}?error=unsafe+webhook+url",
+            status_code=303,
+        )
     _apply_webhook_config(
         lic, url=new_url, rotate=rotate_secret == "1", mint_on_url_change=True
     )
@@ -514,7 +646,7 @@ def _require_admin_bearer(authorization: str | None) -> None:
     s = get_settings()
     if not s.admin_token:
         raise HTTPException(status_code=503, detail="admin disabled (ADMIN_TOKEN unset)")
-    if authorization != f"Bearer {s.admin_token}":
+    if not check_admin_bearer(authorization, s.admin_token):
         raise HTTPException(status_code=401, detail="invalid admin token")
 
 
@@ -537,6 +669,8 @@ def admin_api_webhook_set(
     if lic is None:
         raise HTTPException(status_code=404, detail="license not found")
     new_url = body.url.strip() or None
+    if new_url and not is_safe_url_shape(new_url, allow_http=True):
+        raise HTTPException(status_code=400, detail="unsafe webhook url")
     _apply_webhook_config(
         lic, url=new_url, rotate=body.rotate, mint_on_url_change=False
     )
@@ -552,10 +686,15 @@ def admin_api_webhook_set(
 
 
 @router.post("/admin/licenses/{lid}/webhook/test")
-def license_webhook_test(lid: str, request: Request, db: Session = Depends(get_db)) -> Response:
+def license_webhook_test(
+    lid: str, request: Request,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
     """Send a synthetic license.status.changed event to the configured URL.
     Useful right after issuance to confirm the customer's receiver works."""
     _require_login(request)
+    _require_csrf(request, csrf_token)
     lic = db.query(License).filter_by(id=lid).one_or_none()
     if lic is None:
         raise HTTPException(status_code=404)
@@ -581,61 +720,115 @@ def license_webhook_test(lid: str, request: Request, db: Session = Depends(get_d
     return RedirectResponse(f"/admin/products/{lic.product.slug}?{qs}", status_code=303)
 
 
-def _set_license_status(db: Session, lic: License, new_status: str, note: str) -> None:
+def _webhook_snapshot(lic: License) -> dict:
+    """Snapshot just the fields a status-change webhook needs, so the
+    BackgroundTask doesn't try to dereference an ORM-detached row."""
+    return {
+        "url": lic.webhook_url,
+        "secret": lic.webhook_secret,
+        "license_id": lic.id,
+        "license_key": lic.key,
+        "product_slug": lic.product.slug if lic.product else None,
+        "customer_email": lic.customer.email if lic.customer else None,
+        "status": lic.status,
+    }
+
+
+def _deliver_status_change_async(snapshot: dict, previous_status: str) -> None:
+    """BackgroundTask body. Re-builds the deliver() call from the snapshot
+    so we don't touch the ORM session from the task thread."""
+    if not snapshot["url"] or not snapshot["secret"]:
+        return
+    data = {
+        "license_id": snapshot["license_id"],
+        "license_key": snapshot["license_key"],
+        "key": snapshot["license_key"],
+        "product_slug": snapshot["product_slug"],
+        "customer_email": snapshot["customer_email"],
+        "previous_status": previous_status,
+        "current_status": snapshot["status"],
+    }
+    wh.deliver(
+        url=snapshot["url"], secret=snapshot["secret"],
+        event_type=wh.EVENT_STATUS_CHANGED, data=data,
+    )
+
+
+def _set_license_status(
+    db: Session, lic: License, new_status: str, note: str,
+    bg: BackgroundTasks | None,
+) -> None:
     previous = lic.status
     lic.status = new_status
     db.add(Event(
         license_id=lic.id, product_id=lic.product_id,
         type=f"status:{new_status}", note=note,
     ))
-    # COMMIT before the webhook fires. Receivers POST back into /v1/check
-    # synchronously while we're still inside deliver_status_change(); a
-    # plain flush() would only persist within this session's transaction
-    # and the new GET-a-fresh-Session /v1/check call would still read the
-    # OLD status -> hand back a 200 + JWT for the just-disabled license,
-    # defeating the whole point of the webhook.
+    # COMMIT before scheduling the webhook. Receivers POST back into
+    # /v1/check synchronously from inside their handler; they must see the
+    # committed status, not a flush-only-in-session preview.
     db.commit()
-    # Best-effort outbound webhook. Fire-and-forget — failures are logged
-    # but never raised, so a webhook outage doesn't block admin actions.
-    wh.deliver_status_change(license_obj=lic, previous_status=previous)
+    # Snapshot AFTER commit (status is now persisted). The BackgroundTask
+    # runs after the response is sent so a slow receiver no longer pins the
+    # admin handler thread -- bulk operations don't fan out into N*5s waits.
+    snapshot = _webhook_snapshot(lic)
+    if bg is not None:
+        bg.add_task(_deliver_status_change_async, snapshot, previous)
+    else:
+        _deliver_status_change_async(snapshot, previous)
 
 
 @router.post("/admin/licenses/{lid}/revoke")
-def license_revoke(lid: str, request: Request, db: Session = Depends(get_db)) -> Response:
+def license_revoke(
+    lid: str, request: Request, bg: BackgroundTasks,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
     _require_login(request)
+    _require_csrf(request, csrf_token)
     lic = db.query(License).filter_by(id=lid).one_or_none()
     if lic is None:
         raise HTTPException(status_code=404)
-    _set_license_status(db, lic, "revoked", "ui/revoke")
+    _set_license_status(db, lic, "revoked", "ui/revoke", bg)
     return RedirectResponse(f"/admin/products/{lic.product.slug}", status_code=303)
 
 
 @router.post("/admin/licenses/{lid}/disable")
-def license_disable(lid: str, request: Request, db: Session = Depends(get_db)) -> Response:
+def license_disable(
+    lid: str, request: Request, bg: BackgroundTasks,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
     """Soft-toggle off. Distinct from revoke — can be flipped back via /enable.
     Same effect on /v1/check while disabled (401 reason=disabled)."""
     _require_login(request)
+    _require_csrf(request, csrf_token)
     lic = db.query(License).filter_by(id=lid).one_or_none()
     if lic is None:
         raise HTTPException(status_code=404)
-    _set_license_status(db, lic, "disabled", "ui/disable")
+    _set_license_status(db, lic, "disabled", "ui/disable", bg)
     return RedirectResponse(f"/admin/products/{lic.product.slug}", status_code=303)
 
 
 @router.post("/admin/licenses/{lid}/enable")
-def license_enable(lid: str, request: Request, db: Session = Depends(get_db)) -> Response:
+def license_enable(
+    lid: str, request: Request, bg: BackgroundTasks,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
     """Flip a disabled or revoked license back to active. ASM clients drop
     upstream_rejected on the next /v1/check (every 24h via Celery beat, or
     immediately on backend restart)."""
     _require_login(request)
+    _require_csrf(request, csrf_token)
     lic = db.query(License).filter_by(id=lid).one_or_none()
     if lic is None:
         raise HTTPException(status_code=404)
-    _set_license_status(db, lic, "active", "ui/enable")
+    _set_license_status(db, lic, "active", "ui/enable", bg)
     return RedirectResponse(f"/admin/products/{lic.product.slug}", status_code=303)
 
 
-def _delete_license(db: Session, lic: License) -> None:
+def _delete_license(db: Session, lic: License, bg: BackgroundTasks | None) -> None:
     # Snapshot fields BEFORE delete so we can fire the webhook with them
     # afterwards (the License row is gone and lic.product / lic.customer
     # become unreachable post-commit).
@@ -662,21 +855,32 @@ def _delete_license(db: Session, lic: License) -> None:
     # license is gone (-> 401 invalid_key), not still present in another
     # session's snapshot.
     db.commit()
-    # Best-effort outbound webhook for the deletion event.
     if webhook_url and webhook_secret:
-        wh.deliver_deleted(webhook_url=webhook_url, webhook_secret=webhook_secret, **snapshot)
+        def _deliver() -> None:
+            wh.deliver_deleted(
+                webhook_url=webhook_url, webhook_secret=webhook_secret, **snapshot
+            )
+        if bg is not None:
+            bg.add_task(_deliver)
+        else:
+            _deliver()
 
 
 @router.post("/admin/licenses/{lid}/delete")
-def license_delete_one(lid: str, request: Request, db: Session = Depends(get_db)) -> Response:
+def license_delete_one(
+    lid: str, request: Request, bg: BackgroundTasks,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
     """Single-row delete (trash-icon path). Bulk delete on the form-level
     submit button still works for multi-select."""
     _require_login(request)
+    _require_csrf(request, csrf_token)
     lic = db.query(License).filter_by(id=lid).one_or_none()
     if lic is None:
         raise HTTPException(status_code=404)
     slug = lic.product.slug
-    _delete_license(db, lic)
+    _delete_license(db, lic, bg)
     return RedirectResponse(f"/admin/products/{slug}?deleted=1", status_code=303)
 
 
@@ -684,10 +888,13 @@ def license_delete_one(lid: str, request: Request, db: Session = Depends(get_db)
 def licenses_bulk_delete(
     slug: str,
     request: Request,
+    bg: BackgroundTasks,
     license_ids: list[str] = Form(default=[]),
+    csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ) -> Response:
     _require_login(request)
+    _require_csrf(request, csrf_token)
     p = db.query(Product).filter_by(slug=slug).one_or_none()
     if p is None:
         raise HTTPException(status_code=404)
@@ -700,11 +907,11 @@ def licenses_bulk_delete(
         lic = db.query(License).filter_by(id=lid, product_id=p.id).one_or_none()
         if lic is None:
             continue
-        # _delete_license commits per-license now (so the webhook receiver
-        # sees the deletion). Bulk semantics become "best effort, each is
-        # independent" -- which is fine for a delete: one failed receiver
-        # doesn't block the others.
-        _delete_license(db, lic)
+        # _delete_license commits per-license + schedules its webhook on
+        # bg. Bulk semantics: best-effort, each is independent. The webhook
+        # fan-out no longer pins the request thread (M3 fix) -- 20 deletes
+        # return as fast as a single delete.
+        _delete_license(db, lic, bg)
         deleted += 1
     return RedirectResponse(
         f"/admin/products/{slug}?deleted={deleted}", status_code=303
@@ -737,12 +944,14 @@ def customer_edit(
     name: str = Form(""),
     email: str = Form(...),
     stripe_customer_id: str = Form(""),
+    csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ) -> Response:
     """Edit a customer's name / email / stripe_customer_id. Email is the
     natural-key used by license issuance dedupe, so changing it to an email
     already owned by another customer is rejected (400 via ?error=)."""
     _require_login(request)
+    _require_csrf(request, csrf_token)
     cust = db.query(Customer).filter_by(id=cid).one_or_none()
     if cust is None:
         raise HTTPException(status_code=404)
@@ -786,8 +995,6 @@ def events_csv(request: Request, db: Session = Depends(get_db)) -> Response:
     """Export the events log (most-recent 5000 rows) as CSV. Browser shows
     the OS Save As dialog because of the attachment Content-Disposition."""
     _require_login(request)
-    import csv
-    import io
     rows = db.query(Event).order_by(Event.created_at.desc()).limit(5000).all()
     buf = io.StringIO()
     w = csv.writer(buf)
@@ -795,7 +1002,6 @@ def events_csv(request: Request, db: Session = Depends(get_db)) -> Response:
     for e in rows:
         # Payload is a JSON-able dict; serialize for the CSV cell. csv.writer
         # quotes embedded commas/quotes automatically.
-        import json
         payload = json.dumps(e.payload or {}, separators=(",", ":"))
         w.writerow([
             e.created_at.strftime("%Y-%m-%d %H:%M:%S"),
@@ -805,7 +1011,7 @@ def events_csv(request: Request, db: Session = Depends(get_db)) -> Response:
             e.note or "",
             payload,
         ])
-    filename = f"events-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.csv"
+    filename = f"events-{_utcnow().strftime('%Y%m%d-%H%M%S')}.csv"
     return Response(
         buf.getvalue(),
         media_type="text/csv",

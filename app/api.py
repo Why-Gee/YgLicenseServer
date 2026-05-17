@@ -19,7 +19,7 @@ import hashlib
 import logging
 import re
 import secrets
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
@@ -30,7 +30,9 @@ from app import webhooks
 from app.config import get_settings
 from app.db import get_db
 from app.email import send_license_email
+from app.keystore import encrypt_pem
 from app.models import Customer, Event, Install, License, Product
+from app.security import check_admin_bearer, is_safe_url_shape
 from app.signing import generate_keypair, sign_license_jwt
 
 log = logging.getLogger("license-server.api")
@@ -65,7 +67,39 @@ class CheckOut(BaseModel):
     webhook_secret: str
 
 
-_PUBLIC_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+def _utcnow() -> datetime:
+    """Naive UTC. Models still store tz-naive DateTime columns; use this
+    everywhere we previously called datetime.utcnow() so the deprecation
+    warning is gone but stored values stay comparable to existing rows."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _client_ip_hash(request: Request) -> str | None:
+    """SHA256 of the originating IP. Reads X-Forwarded-For when the request
+    came through a trusted proxy (Caddy in our deploy), falling back to the
+    direct socket peer. Without this every request behind the reverse-proxy
+    hashed `127.0.0.1`, making the column useless for per-tenant install
+    tracking.
+
+    Trust model: we only honor X-Forwarded-For when the immediate peer
+    (request.client.host) is loopback. In our deploy Caddy listens on
+    127.0.0.1 only -- anything from off-box hits Caddy first, gets the
+    XFF header, and reaches us via loopback. Direct hits (impossible in
+    prod) would expose the socket peer.
+    """
+    if request.client is None:
+        return None
+    peer = request.client.host
+    src = peer
+    if peer in ("127.0.0.1", "::1") and "x-forwarded-for" in request.headers:
+        # XFF is a comma-separated list; the LEFTMOST entry is the original
+        # client. Each subsequent proxy appends, so the right side is closer
+        # to us. We strip whitespace and take the first non-empty token.
+        xff = request.headers["x-forwarded-for"]
+        first = next((p.strip() for p in xff.split(",") if p.strip()), None)
+        if first:
+            src = first
+    return hashlib.sha256(src.encode()).hexdigest()
 
 
 @router.post("/v1/check", response_model=CheckOut)
@@ -77,14 +111,19 @@ def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> Che
         raise HTTPException(status_code=401, detail={"reason": "revoked"})
     if lic.status == "disabled":
         raise HTTPException(status_code=401, detail={"reason": "disabled"})
-    if lic.valid_until < datetime.utcnow():
+    if lic.valid_until < _utcnow():
         raise HTTPException(status_code=401, detail={"reason": "expired"})
 
     # Self-registered webhook URL. Strip trailing slash, validate, upsert
     # only when changed so we don't churn the row on every heartbeat.
     if body.public_url is not None and body.public_url.strip():
         candidate = body.public_url.strip().rstrip("/")
-        if len(candidate) > 500 or not _PUBLIC_URL_RE.match(candidate):
+        if len(candidate) > 500 or not is_safe_url_shape(candidate, allow_http=True):
+            # SSRF guard — refuse URLs that resolve to private/loopback/
+            # link-local addresses or end in *.local / *.internal / etc.
+            # We otherwise accept http+https here so dev installs against
+            # public-DNS hostnames over plain http still work (cloudflared
+            # tunnel front-doors that terminate TLS upstream).
             raise HTTPException(status_code=400, detail={"reason": "invalid_public_url"})
         if lic.webhook_url != candidate:
             log.info("license %s webhook_url updated to %s", lic.id, candidate)
@@ -96,10 +135,7 @@ def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> Che
     if not lic.webhook_secret:
         lic.webhook_secret = webhooks.generate_secret()
 
-    ip_hash = (
-        hashlib.sha256((request.client.host if request.client else "").encode()).hexdigest()
-        if request.client else None
-    )
+    ip_hash = _client_ip_hash(request)
     install = (
         db.query(Install)
         .filter_by(license_id=lic.id, install_id=body.install_id)
@@ -115,7 +151,7 @@ def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> Che
         db.add(install)
     else:
         install.version = body.version
-        install.last_seen_at = datetime.utcnow()
+        install.last_seen_at = _utcnow()
         install.ip_addr_hash = ip_hash
 
     token, _exp = sign_license_jwt(
@@ -161,7 +197,7 @@ def _require_admin(authorization: str | None = Header(default=None)) -> None:
     s = get_settings()
     if not s.admin_token:
         raise HTTPException(status_code=503, detail="admin disabled (ADMIN_TOKEN unset)")
-    if authorization != f"Bearer {s.admin_token}":
+    if not check_admin_bearer(authorization, s.admin_token):
         raise HTTPException(status_code=401, detail="invalid admin token")
 
 
@@ -204,7 +240,7 @@ def admin_create_product(body: CreateProductIn, db: Session = Depends(get_db)) -
         name=body.name,
         description=body.description,
         public_key_pem=pub_pem,
-        private_key_pem=priv_pem,
+        private_key_pem=encrypt_pem(priv_pem),
         key_prefix=body.key_prefix,
         stripe_webhook_secret=body.stripe_webhook_secret,
         stripe_api_key=body.stripe_api_key,
@@ -301,7 +337,7 @@ def admin_issue(slug: str, body: IssueIn, db: Session = Depends(get_db)) -> Issu
         plan=body.plan,
         max_users=body.max_users,
         features=body.features,
-        valid_until=datetime.utcnow() + timedelta(days=body.valid_days),
+        valid_until=_utcnow() + timedelta(days=body.valid_days),
         status="active",
     )
     db.add(lic)
