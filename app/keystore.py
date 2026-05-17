@@ -54,6 +54,34 @@ def _fernet() -> Fernet | None:
         return None
 
 
+def _fernet_prev() -> Fernet | None:
+    """Fernet built from LICENSE_KEY_ENCRYPTION_KEY_PREV. Internal: only the
+    KEK-rotation script (`app.scripts.rewrap_secrets --migrate-from-prev`)
+    should call this. Returns None when PREV is unset or malformed."""
+    s = get_settings()
+    if not s.key_encryption_key_prev:
+        return None
+    try:
+        return Fernet(s.key_encryption_key_prev.encode())
+    except (ValueError, TypeError) as e:
+        log.error("LICENSE_KEY_ENCRYPTION_KEY_PREV invalid (must be 32-byte url-safe base64): %s", e)
+        return None
+
+
+def _decrypt_with(f: Fernet, stored: str) -> str:
+    """Decrypt an `enc:v1:` token using an explicit Fernet (not the global
+    one). Used by the KEK rotation script to decrypt with PREV before
+    re-encrypting under the current KEK. Caller is responsible for checking
+    `is_encrypted(stored)` first."""
+    payload = stored[len(_PREFIX):].encode("ascii")
+    try:
+        return f.decrypt(payload).decode("utf-8")
+    except InvalidToken as e:
+        raise RuntimeError(
+            "secret decryption failed under the supplied KEK"
+        ) from e
+
+
 def is_encrypted(stored: str | None) -> bool:
     """True when `stored` is already wrapped by this module. Used by data
     migrations that rewrap legacy plaintext."""

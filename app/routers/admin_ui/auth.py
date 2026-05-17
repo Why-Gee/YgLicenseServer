@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from app.config import Settings, get_settings
+from app.rate_limit import limiter
 from app.routers.admin_ui._deps import (
     SESSION_COOKIE,
     SESSION_MAX_AGE_SECONDS,
@@ -30,6 +31,7 @@ def login_form(request: Request, error: str | None = None) -> Response:
 
 
 @router.post("/admin/login")
+@limiter.limit("10/minute")
 def login(
     request: Request,
     token: str = Form(...),

@@ -1,0 +1,12 @@
+[Unit]
+Description=Nightly YgLicenseServer DB backup to GCS
+Requires=yg-license-backup.service
+
+[Timer]
+# 03:17 UTC daily. Offset from the hour to avoid the global cron stampede.
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

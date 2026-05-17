@@ -47,6 +47,10 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
     importlib.reload(ks)
     import app.signing as sg
     importlib.reload(sg)
+    # Reset the rate-limiter's in-memory buckets between tests so one test's
+    # 60 calls don't poison the next test's first call.
+    import app.rate_limit as rl
+    importlib.reload(rl)
     # Services first — routers import from these.
     import app.services.errors as svc_err
     importlib.reload(svc_err)

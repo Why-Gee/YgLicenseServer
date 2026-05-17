@@ -1,0 +1,11 @@
+[Unit]
+Description=YgLicenseServer SQLite -> GCS nightly backup
+After=network-online.target yg-license-server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/yg-license-backup.sh
+# Read the same env file the server uses so DB_PATH (if overridden) and
+# BACKUP_BUCKET stay in lockstep.
+EnvironmentFile=-/etc/yg-license-server/yg-license-server.env
