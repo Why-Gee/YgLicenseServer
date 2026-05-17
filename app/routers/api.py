@@ -26,7 +26,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.db import get_db
 from app.models import Customer, License
 from app.security import check_admin_bearer
@@ -126,8 +126,10 @@ def get_pubkey(slug: str, db: Session = Depends(get_db)) -> str:
 
 # ---------- /v1/admin/* --------------------------------------------------
 
-def _require_admin(authorization: str | None = Header(default=None)) -> None:
-    s = get_settings()
+def _require_admin(
+    authorization: str | None = Header(default=None),
+    s: Settings = Depends(get_settings),
+) -> None:
     if not s.admin_token:
         raise HTTPException(status_code=503, detail="admin disabled (ADMIN_TOKEN unset)")
     if not check_admin_bearer(authorization, s.admin_token):

@@ -10,10 +10,10 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import __version__
-from app.admin_ui import _LoginRequired
-from app.admin_ui import router as admin_ui_router
-from app.api import router as api_router
 from app.db import SessionLocal
+from app.routers.admin_ui import ALL_ROUTERS as ADMIN_UI_ROUTERS
+from app.routers.admin_ui import LoginRequired
+from app.routers.api import router as api_router
 from app.stripe_webhook import router as stripe_router
 
 
@@ -72,13 +72,14 @@ def _validate_secrets_at_boot() -> None:
 app = FastAPI(title="YgLicenseServer", version=__version__, lifespan=lifespan)
 app.include_router(api_router)
 app.include_router(stripe_router)
-app.include_router(admin_ui_router)
+for _r in ADMIN_UI_ROUTERS:
+    app.include_router(_r)
 
 
-@app.exception_handler(_LoginRequired)
-async def _login_required_handler(_request: Request, _exc: _LoginRequired) -> Response:
+@app.exception_handler(LoginRequired)
+async def _login_required_handler(_request: Request, _exc: LoginRequired) -> Response:
     """Unauthenticated admin-page hit → real 303 to /admin/login. Lets every
-    handler just call _require_login() without threading a return-redirect."""
+    handler just call require_login() without threading a return-redirect."""
     return RedirectResponse("/admin/login", status_code=303)
 
 

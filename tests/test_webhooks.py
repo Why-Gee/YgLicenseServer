@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import importlib
 import json
 from contextlib import contextmanager
 
 import httpx
-import pytest
 from fastapi.testclient import TestClient
 
 
@@ -40,31 +38,6 @@ def _captured(monkeypatch, status: int = 200):
         yield sent
     finally:
         test_client.close()
-
-
-@pytest.fixture
-def client(tmp_path, monkeypatch) -> TestClient:
-    db_path = tmp_path / "license.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
-    monkeypatch.setenv("ADMIN_TOKEN", "test-admin")
-    monkeypatch.setenv("SESSION_SECRET", "test-admin")
-    monkeypatch.setenv("COOKIE_SECURE", "false")
-    monkeypatch.delenv("RESEND_API_KEY", raising=False)
-
-    import app.config as cfg
-    import app.db as db
-    importlib.reload(cfg)
-    importlib.reload(db)
-    import app.webhooks as wh
-    importlib.reload(wh)
-    import app.api as api_mod
-    importlib.reload(api_mod)
-    import app.admin_ui as ui_mod
-    importlib.reload(ui_mod)
-    import app.main as m
-    importlib.reload(m)
-    db.init_db()
-    return TestClient(m.app)
 
 
 def _admin_login(client: TestClient) -> dict[str, str]:

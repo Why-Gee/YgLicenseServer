@@ -32,8 +32,9 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
         monkeypatch.delenv("RESEND_API_KEY", raising=False)
 
     # Reload order matters: config first (env -> Settings); db next (rebuilds
-    # SessionLocal off the new url); domain modules last (they read config +
-    # db at import time).
+    # SessionLocal off the new url); services (which import config/db) before
+    # routers; routers before main. Each module captured `from X import Y`
+    # symbols at first import, so we have to reload every layer to rebind.
     import app.config as cfg
     importlib.reload(cfg)
     import app.db as db
@@ -42,11 +43,43 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
     importlib.reload(em)
     import app.webhooks as wh
     importlib.reload(wh)
-    import app.api as api_mod
+    import app.keystore as ks
+    importlib.reload(ks)
+    import app.signing as sg
+    importlib.reload(sg)
+    # Services first — routers import from these.
+    import app.services.errors as svc_err
+    importlib.reload(svc_err)
+    import app.services.products as svc_p
+    importlib.reload(svc_p)
+    import app.services.licenses as svc_l
+    importlib.reload(svc_l)
+    import app.services.customers as svc_c
+    importlib.reload(svc_c)
+    import app.services.check as svc_chk
+    importlib.reload(svc_chk)
+    import app.services as svc
+    importlib.reload(svc)
+    # Routers.
+    import app.routers.api as api_mod
     importlib.reload(api_mod)
     import app.stripe_webhook as sw
     importlib.reload(sw)
-    import app.admin_ui as ui_mod
+    import app.routers.admin_ui._deps as ui_deps
+    importlib.reload(ui_deps)
+    import app.routers.admin_ui.auth as ui_auth
+    importlib.reload(ui_auth)
+    import app.routers.admin_ui.dashboard as ui_dash
+    importlib.reload(ui_dash)
+    import app.routers.admin_ui.products as ui_prod
+    importlib.reload(ui_prod)
+    import app.routers.admin_ui.licenses as ui_lic
+    importlib.reload(ui_lic)
+    import app.routers.admin_ui.customers as ui_cust
+    importlib.reload(ui_cust)
+    import app.routers.admin_ui.events as ui_ev
+    importlib.reload(ui_ev)
+    import app.routers.admin_ui as ui_mod
     importlib.reload(ui_mod)
     import app.main as m
     importlib.reload(m)
