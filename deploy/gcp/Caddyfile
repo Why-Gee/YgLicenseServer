@@ -1,8 +1,8 @@
 {
-    email {$ADMIN_EMAIL}
+    email ${ADMIN_EMAIL}
 }
 
-{$LICENSE_HOST} {
+${LICENSE_HOST} {
     encode zstd gzip
     reverse_proxy 127.0.0.1:8800
     log {
