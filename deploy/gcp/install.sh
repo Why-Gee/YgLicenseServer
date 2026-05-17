@@ -59,6 +59,12 @@ install -d -m 0755 "$ENV_DIR"
 install -d -m 0755 "$DATA_DIR"
 install -d -m 0755 /var/log/caddy
 
+# The container runs as the non-root `app` user (uid 10001 -- see Dockerfile).
+# The bind-mounted $DATA_DIR has to be writable by that uid or SQLite raises
+# "attempt to write a readonly database" and the entrypoint's `alembic upgrade
+# head` crash-loops the unit. chown is idempotent; safe on re-run.
+chown -R 10001:10001 "$DATA_DIR"
+
 [ -f "$ENV_DIR/yg-license-server.env" ] || {
   echo "ERROR: $ENV_DIR/yg-license-server.env missing." >&2
   echo "Copy deploy/gcp/yg-license-server.env.example there and fill in." >&2
