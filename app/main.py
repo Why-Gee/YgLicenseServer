@@ -6,16 +6,18 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi import status as http_status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import __version__
 from app.db import SessionLocal
+from app.request_id import RequestIdLogFilter, RequestIdMiddleware
 from app.routers.admin_ui import ALL_ROUTERS as ADMIN_UI_ROUTERS
 from app.routers.admin_ui import LoginRequired
 from app.routers.api import router as api_router
+from app.services.errors import ServiceError
 from app.stripe_webhook import router as stripe_router
 
 
@@ -24,11 +26,18 @@ async def lifespan(_app: FastAPI):
     # Re-attach root handler AFTER uvicorn's dictConfig wipes it. force=True
     # clears whatever uvicorn left so app loggers ("license-server.*") emit
     # through our format. Uvicorn's own loggers keep their own handlers.
+    # Format includes %(request_id)s so every log line during a request
+    # carries the correlation id; lines outside a request show '-'.
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        format="%(asctime)s %(levelname)s %(name)s [req=%(request_id)s]: %(message)s",
         force=True,
     )
+    # Attach the request-id filter to the root handler so every record gets
+    # the `request_id` attribute set before format() runs.
+    rid_filter = RequestIdLogFilter()
+    for h in logging.getLogger().handlers:
+        h.addFilter(rid_filter)
     _validate_secrets_at_boot()
     yield
 
@@ -51,6 +60,16 @@ def _validate_secrets_at_boot() -> None:
         missing.append("ADMIN_TOKEN")
     if not s.session_secret:
         missing.append("SESSION_SECRET")
+    # Disallow reusing one secret across bearer authn + cookie signing.
+    # Sharing makes them un-rotatable independently and means a leak of one
+    # is a leak of both. The boot validator catches this loudly.
+    if s.admin_token and s.session_secret and s.admin_token == s.session_secret:
+        log.critical(
+            "ADMIN_TOKEN and SESSION_SECRET are identical; they MUST be "
+            "distinct so they can be rotated independently. Regenerate one."
+        )
+        if os.environ.get("LICENSE_SERVER_REQUIRE_SECRETS", "").lower() in ("1", "true", "yes"):
+            sys.exit(78)
     # KEK is a soft-warning: signing still works without it (plaintext PEMs
     # in DB), but at-rest encryption is the desired posture in production.
     if not s.key_encryption_key:
@@ -58,6 +77,17 @@ def _validate_secrets_at_boot() -> None:
             "LICENSE_KEY_ENCRYPTION_KEY unset; product private keys are "
             "stored as plaintext PEM in the DB. Generate with "
             "`python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`"
+        )
+    # Production deploys that ship real customer emails must NOT use the
+    # Resend public test sender (`onboarding@resend.dev`). Resend's
+    # documentation is explicit that mail from that address is for
+    # development only and may be rate-limited / dropped.
+    if s.resend_api_key and "resend.dev" in s.email_from.lower():
+        log.warning(
+            "RESEND_API_KEY is set but EMAIL_FROM still points at the Resend "
+            "test sender (%s); production mail will be flaky/rate-limited. "
+            "Verify a domain in Resend and set EMAIL_FROM to a sender on it.",
+            s.email_from,
         )
     if not missing:
         return
@@ -72,6 +102,10 @@ def _validate_secrets_at_boot() -> None:
 
 
 app = FastAPI(title="YgLicenseServer", version=__version__, lifespan=lifespan)
+# Mount the request-id middleware FIRST so it wraps every other middleware
+# (incl. ones FastAPI itself adds) -- we want the id available before any
+# log line the request generates, including authn/CSRF middleware lines.
+app.add_middleware(RequestIdMiddleware)
 app.mount(
     "/static",
     StaticFiles(directory=Path(__file__).parent / "static"),
@@ -88,6 +122,19 @@ async def _login_required_handler(_request: Request, _exc: LoginRequired) -> Res
     """Unauthenticated admin-page hit → real 303 to /admin/login. Lets every
     handler just call require_login() without threading a return-redirect."""
     return RedirectResponse("/admin/login", status_code=303)
+
+
+@app.exception_handler(ServiceError)
+async def _service_error_handler(_request: Request, exc: ServiceError) -> Response:
+    """Default mapping for unhandled service-layer exceptions: emit a JSON
+    body with the stable `code` + a human-readable message at the right HTTP
+    status. UI handlers that want a 303 redirect-with-?error= continue to
+    catch the exception locally; this handler only fires when nothing else
+    intervenes. Keeps JSON API routes free of per-call try/except boilerplate."""
+    return JSONResponse(
+        status_code=exc.http_status,
+        content={"code": exc.code, "detail": str(exc) or exc.code},
+    )
 
 
 # Kubernetes-convention health endpoints. /healthz is pure liveness — proves

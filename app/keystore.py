@@ -1,11 +1,14 @@
-"""At-rest encryption of per-product Ed25519 private keys.
+"""At-rest encryption of sensitive DB-stored secrets.
 
 KEK envelope:
 - A single `LICENSE_KEY_ENCRYPTION_KEY` env var (Fernet key, base64-encoded
-  32 raw bytes) wraps each private_key_pem when it lands in the DB.
+  32 raw bytes) wraps every secret stored at rest. Today that's:
+    * `products.private_key_pem`     (Ed25519 license-signing key)
+    * `products.stripe_api_key`      (Stripe live/test API key)
+    * `products.stripe_webhook_secret` (Stripe endpoint signing secret)
 - Stored values are prefixed `enc:v1:` followed by the Fernet ciphertext.
-  Rows without that prefix are legacy plaintext PEM; they decrypt to
-  themselves and re-encrypt on next write.
+  Rows without that prefix are legacy plaintext; they decrypt to themselves
+  and re-encrypt on the next write.
 - If `LICENSE_KEY_ENCRYPTION_KEY` is unset, encrypt is a no-op (stores
   plaintext). Lets dev/test work without configuring a KEK; production
   should always set one. The boot-time validator logs a CRITICAL warning
@@ -13,11 +16,17 @@ KEK envelope:
 
 Why envelope: rotating the KEK only needs a re-write of each row, not a
 re-keygen of every product's Ed25519 pair (which would invalidate every
-client that has baked in the old public key).
+client that has baked in the old public key) and not a rotation of Stripe
+keys (which requires a Stripe dashboard round-trip).
 
 Why not full library KMS: this server is single-instance and self-hosted;
 adding KMS-as-a-service is out of scope. Keep the secret-management story
 in the same .env that already holds ADMIN_TOKEN.
+
+API:
+- encrypt_secret / decrypt_secret  -- generic, what new code should use.
+- encrypt_pem / decrypt_pem        -- back-compat aliases for the PEM call
+                                      sites (signing.py, products service).
 """
 from __future__ import annotations
 
@@ -45,35 +54,69 @@ def _fernet() -> Fernet | None:
         return None
 
 
-def encrypt_pem(pem: str) -> str:
-    """Wrap a PEM-encoded private key for at-rest storage. If no KEK is set,
-    returns the input unchanged so dev/test continue to work."""
+def is_encrypted(stored: str | None) -> bool:
+    """True when `stored` is already wrapped by this module. Used by data
+    migrations that rewrap legacy plaintext."""
+    return bool(stored) and stored.startswith(_PREFIX)
+
+
+def encrypt_secret(plaintext: str | None) -> str | None:
+    """Wrap a plaintext secret for at-rest storage. None passes through (so
+    callers can pipe `model.field = encrypt_secret(form_value)` without
+    branching on whether the value is set). If no KEK is configured, returns
+    the input unchanged so dev/test continue to work."""
+    if plaintext is None:
+        return None
+    if is_encrypted(plaintext):
+        # Idempotent: caller may have already wrapped, don't double-wrap.
+        return plaintext
     f = _fernet()
     if f is None:
-        return pem
-    token = f.encrypt(pem.encode("utf-8"))
+        return plaintext
+    token = f.encrypt(plaintext.encode("utf-8"))
     return _PREFIX + token.decode("ascii")
 
 
-def decrypt_pem(stored: str) -> str:
-    """Inverse of encrypt_pem. Legacy plaintext rows (no `enc:v1:` prefix)
-    pass through unchanged so a deploy that turns on encryption mid-life
-    keeps working until the next product is updated."""
+def decrypt_secret(stored: str | None) -> str | None:
+    """Inverse of encrypt_secret. None passes through. Legacy plaintext rows
+    (no `enc:v1:` prefix) pass through unchanged so a deploy that turns on
+    encryption mid-life keeps working until the next write rewraps them."""
+    if stored is None:
+        return None
     if not stored.startswith(_PREFIX):
         return stored
     f = _fernet()
     if f is None:
-        # Encrypted in DB but no KEK at runtime -> hard error; we can't
-        # sign without the private key, and a silent return would leak the
-        # ciphertext as "the key" to PyJWT.
+        # Encrypted in DB but no KEK at runtime -> hard error; the caller
+        # cannot use the ciphertext, and a silent return would leak it as
+        # "the secret" to whatever's downstream.
         raise RuntimeError(
-            "private key is encrypted at rest but LICENSE_KEY_ENCRYPTION_KEY is unset"
+            "secret is encrypted at rest but LICENSE_KEY_ENCRYPTION_KEY is unset"
         )
     payload = stored[len(_PREFIX):].encode("ascii")
     try:
         return f.decrypt(payload).decode("utf-8")
     except InvalidToken as e:
         raise RuntimeError(
-            "private key decryption failed -- LICENSE_KEY_ENCRYPTION_KEY does "
+            "secret decryption failed -- LICENSE_KEY_ENCRYPTION_KEY does "
             "not match the KEK that wrote this row"
         ) from e
+
+
+# ----- back-compat aliases ----------------------------------------------
+# Older call sites (signing.py, products service) call these by their
+# PEM-specific names. Keep the aliases so we don't touch every import; new
+# code should use encrypt_secret / decrypt_secret directly.
+
+def encrypt_pem(pem: str) -> str:
+    """Back-compat alias for encrypt_secret on non-None PEM strings."""
+    result = encrypt_secret(pem)
+    assert result is not None  # input was non-None
+    return result
+
+
+def decrypt_pem(stored: str) -> str:
+    """Back-compat alias for decrypt_secret on non-None stored strings."""
+    result = decrypt_secret(stored)
+    assert result is not None
+    return result

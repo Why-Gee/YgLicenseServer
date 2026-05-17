@@ -21,7 +21,7 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
     base = {
         "DATABASE_URL": f"sqlite:///{db_path}",
         "ADMIN_TOKEN": "test-admin",
-        "SESSION_SECRET": "test-admin",
+        "SESSION_SECRET": "test-session",
         "COOKIE_SECURE": "false",
     }
     base.update(env)

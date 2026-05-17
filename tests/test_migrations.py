@@ -32,7 +32,7 @@ def upgraded_db_url(tmp_path, monkeypatch) -> str:
     url = f"sqlite:///{db_path}"
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.setenv("ADMIN_TOKEN", "x")
-    monkeypatch.setenv("SESSION_SECRET", "x")
+    monkeypatch.setenv("SESSION_SECRET", "y")
 
     import app.config as cfg
     importlib.reload(cfg)
@@ -102,6 +102,75 @@ def test_license_status_check_rejects_typo(upgraded_db_url: str) -> None:
         s.add(bad)
         with pytest.raises(IntegrityError):
             s.commit()
+
+
+def test_stripe_secrets_rewrap_on_upgrade(tmp_path, monkeypatch) -> None:
+    """The 8a336b18bca1 migration must re-encrypt legacy plaintext stripe
+    secrets when LICENSE_KEY_ENCRYPTION_KEY is set at upgrade time. Rows that
+    arrived plaintext from a pre-KEK deploy should come out wrapped, leaving
+    the running app able to decrypt them at request time."""
+    import importlib
+
+    from alembic.config import Config
+    from cryptography.fernet import Fernet
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import Session
+
+    from alembic import command
+
+    db_path = tmp_path / "rewrap.db"
+    url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("ADMIN_TOKEN", "x")
+    monkeypatch.setenv("SESSION_SECRET", "y")
+    monkeypatch.delenv("LICENSE_KEY_ENCRYPTION_KEY", raising=False)
+
+    import app.config as cfg
+    importlib.reload(cfg)
+    import app.keystore as ks
+    importlib.reload(ks)
+
+    alembic_cfg = Config(str(REPO_ROOT / "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    # Step 1: upgrade to the revision JUST BEFORE encrypt-stripe-secrets,
+    # then seed a plaintext row directly.
+    command.upgrade(alembic_cfg, "9a9f5b6937d8")
+
+    from app.models import Product
+    from app.signing import generate_keypair
+    engine = create_engine(url)
+    with Session(engine) as s:
+        priv, pub = generate_keypair()
+        p = Product(
+            slug="legacy", name="Legacy", key_prefix="lg",
+            public_key_pem=pub, private_key_pem=priv,
+            jwt_issuer="lg",
+            stripe_webhook_secret="whsec_LEGACY",
+            stripe_api_key="sk_test_LEGACY",
+        )
+        s.add(p)
+        s.commit()
+
+    # Step 2: now set the KEK and run the new migration. The rewrap loop
+    # should wrap the plaintext values.
+    monkeypatch.setenv("LICENSE_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    importlib.reload(cfg)
+    importlib.reload(ks)
+    command.upgrade(alembic_cfg, "head")
+
+    # Step 3: verify the stored rows are now `enc:v1:` ciphertext.
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT stripe_webhook_secret, stripe_api_key FROM products WHERE slug = 'legacy'")
+        ).first()
+    assert row is not None
+    assert row[0].startswith("enc:v1:")
+    assert row[1].startswith("enc:v1:")
+
+    # And the keystore decrypts them back to the original plaintext.
+    from app.keystore import decrypt_secret
+    assert decrypt_secret(row[0]) == "whsec_LEGACY"
+    assert decrypt_secret(row[1]) == "sk_test_LEGACY"
 
 
 def test_license_delete_cascades_installs(upgraded_db_url: str) -> None:

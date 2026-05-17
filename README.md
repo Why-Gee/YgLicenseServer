@@ -21,9 +21,10 @@ Originally extracted from [Animal Shelter Manager](https://github.com/Why-Gee/An
 python -m venv .venv && source .venv/bin/activate         # or .venv\Scripts\activate on Windows
 pip install -e ".[dev]"
 
-# generate a long random admin token (used as both auth + session-cookie key)
+# generate two long, DISTINCT secrets -- bearer auth and session signing are
+# rotated independently, so they must not share a value.
 export ADMIN_TOKEN=$(python -c "import secrets;print(secrets.token_urlsafe(32))")
-export SESSION_SECRET=$ADMIN_TOKEN
+export SESSION_SECRET=$(python -c "import secrets;print(secrets.token_urlsafe(32))")
 export DATABASE_URL=sqlite:///./license.db
 export COOKIE_SECURE=false                                # local http only
 
@@ -42,7 +43,7 @@ For a fully wired-up free-tier deploy on GCP `e2-micro` with Caddy + Let's Encry
 docker build -t yg-license-server .
 docker run --rm -p 8800:8800 \
   -e ADMIN_TOKEN=$ADMIN_TOKEN \
-  -e SESSION_SECRET=$ADMIN_TOKEN \
+  -e SESSION_SECRET=$SESSION_SECRET \
   -e DATABASE_URL=sqlite:////data/license.db \
   -e COOKIE_SECURE=true \
   -v $PWD/data:/data \

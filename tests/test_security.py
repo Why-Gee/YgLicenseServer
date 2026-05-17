@@ -155,6 +155,38 @@ def _make_stripe_event(event_id: str, *, customer_id: str = "cus_X") -> dict[str
     }
 
 
+def test_stripe_webhook_secret_encrypted_at_rest(make_client) -> None:
+    """When a KEK is configured, creating a product with a Stripe webhook
+    secret must store the row encrypted (`enc:v1:` prefix), and the verify
+    path must still decrypt it back correctly to verify signatures."""
+    from cryptography.fernet import Fernet
+    kek = Fernet.generate_key().decode()
+    c = make_client(LICENSE_KEY_ENCRYPTION_KEY=kek)
+
+    r = c.post(
+        "/v1/admin/products",
+        headers={"Authorization": "Bearer test-admin"},
+        json={
+            "slug": "asm", "name": "ASM", "key_prefix": "asm",
+            "stripe_webhook_secret": "whsec_secret_value",
+            "stripe_api_key": "sk_test_value",
+        },
+    )
+    assert r.status_code == 200
+
+    from app.db import SessionLocal
+    from app.keystore import decrypt_secret
+    from app.models import Product
+    with SessionLocal() as s:
+        p = s.query(Product).filter_by(slug="asm").one()
+        # Stored ciphertext, not plaintext.
+        assert p.stripe_webhook_secret.startswith("enc:v1:")
+        assert p.stripe_api_key.startswith("enc:v1:")
+        # Decrypts back to the supplied values.
+        assert decrypt_secret(p.stripe_webhook_secret) == "whsec_secret_value"
+        assert decrypt_secret(p.stripe_api_key) == "sk_test_value"
+
+
 def test_stripe_event_idempotent(client: TestClient, monkeypatch) -> None:
     """Same event.id delivered twice must not extend valid_until twice."""
     r = client.post(

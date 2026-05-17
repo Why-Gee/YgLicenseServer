@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
 from app import webhooks
+from app._time import utcnow as _utcnow
 from app.models import Event, Install, License
 from app.security import is_safe_url_shape
 from app.services.errors import ServiceError
@@ -30,10 +30,6 @@ class CheckRejected(ServiceError):
 class CheckResult:
     jwt: str
     license: License
-
-
-def _utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def check_license(
@@ -65,6 +61,16 @@ def check_license(
             raise CheckRejected("invalid_public_url", http_status=400)
         if lic.webhook_url != candidate:
             log.info("license %s webhook_url updated to %s", lic.id, candidate)
+            db.add(Event(
+                license_id=lic.id, product_id=lic.product_id,
+                type="webhook:self-registered",
+                payload={
+                    "previous_url": lic.webhook_url,
+                    "new_url": candidate,
+                    "via": "v1_check",
+                },
+                note="service/check",
+            ))
             lic.webhook_url = candidate
 
     # Lazy-mint webhook_secret. Receivers need it to verify inbound pushes,

@@ -75,7 +75,6 @@ def license_edit(
     plan: str = Form(...),
     max_users: int = Form(...),
     valid_until: str = Form(...),
-    customer_name: str = Form(""),
     features_json: str = Form("{}"),
     webhook_url: str = Form(""),
     rotate_secret: str = Form(""),
@@ -83,8 +82,11 @@ def license_edit(
     db: Session = Depends(get_db),
 ) -> Response:
     """Edit plan / max_users / valid_until / features / webhook config.
-    Email + key are not editable. Same redirect contract as /webhook update
-    so the secret is shown once when set or rotated."""
+    Email + key are not editable. Customer-side fields (name, stripe id) are
+    edited via /admin/customers/{id}/edit -- a Customer is tenant-wide, so
+    renaming via a license form would silently affect their other products.
+    Same redirect contract as /webhook update so the secret is shown once
+    when set or rotated."""
     require_login(request)
     require_csrf(request, csrf_token)
     lic = db.query(License).filter_by(id=lid).one_or_none()
@@ -94,7 +96,6 @@ def license_edit(
         result = licenses_svc.edit_license(
             db, lic,
             plan=plan, max_users=max_users, valid_until_raw=valid_until,
-            customer_name=customer_name,
             features_json=features_json,
             webhook_url=webhook_url,
             rotate_secret=rotate_secret == "1",
@@ -306,13 +307,20 @@ def licenses_bulk_delete(
         return RedirectResponse(
             f"/admin/products/{slug}?error=no+licenses+selected", status_code=303
         )
-    deleted = 0
-    for lid in license_ids:
-        lic = db.query(License).filter_by(id=lid, product_id=p.id).one_or_none()
-        if lic is None:
-            continue
-        licenses_svc.delete_license(db, lic, schedule=bg.add_task, note="ui/delete")
-        deleted += 1
+    # Resolve all license rows first, scoped to this product so a hostile
+    # form payload can't reach across products. IDs that don't match are
+    # silently skipped (same behavior as the single-row path -- the worst a
+    # crafted form can do is no-op).
+    rows = (
+        db.query(License)
+        .filter(License.product_id == p.id, License.id.in_(license_ids))
+        .all()
+    )
+    # One transaction for the whole batch -- partial failure rolls back the
+    # entire group rather than leaving the table half-deleted.
+    snapshots = licenses_svc.delete_licenses_bulk(
+        db, rows, schedule=bg.add_task, note="ui/bulk-delete",
+    )
     return RedirectResponse(
-        f"/admin/products/{slug}?deleted={deleted}", status_code=303
+        f"/admin/products/{slug}?deleted={len(snapshots)}", status_code=303
     )

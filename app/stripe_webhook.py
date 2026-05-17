@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import secrets
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import stripe
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -34,16 +34,14 @@ try:  # pragma: no cover - import-time compat
 except ImportError:  # pragma: no cover
     from stripe.error import SignatureVerificationError  # type: ignore[no-redef]
 
+from app._time import utcnow as _utcnow
 from app.db import get_db
 from app.email import send_license_email
+from app.keystore import decrypt_secret
 from app.models import Customer, Event, License, ProcessedStripeEvent, Product
 
 log = logging.getLogger("license-server.stripe")
 router = APIRouter()
-
-
-def _utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 # Stripe event-type -> handler. Each handler takes (db, product, event) and
@@ -74,10 +72,15 @@ async def stripe_webhook(
         raise HTTPException(status_code=404, detail="product not found")
     if not p.stripe_webhook_secret:
         raise HTTPException(status_code=503, detail="webhook secret not configured for product")
+    try:
+        webhook_secret = decrypt_secret(p.stripe_webhook_secret)
+    except RuntimeError as e:
+        log.error("stripe webhook secret decrypt failed for %s: %s", slug, e)
+        raise HTTPException(status_code=503, detail="webhook secret unreadable") from e
 
     payload = await request.body()
     try:
-        event = stripe.Webhook.construct_event(payload, stripe_signature, p.stripe_webhook_secret)
+        event = stripe.Webhook.construct_event(payload, stripe_signature, webhook_secret)
     except (ValueError, SignatureVerificationError) as e:
         log.warning("invalid stripe webhook for %s: %s", slug, e)
         raise HTTPException(status_code=400, detail="invalid signature") from e

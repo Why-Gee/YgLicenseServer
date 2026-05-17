@@ -82,3 +82,27 @@ def test_decrypt_encrypted_value_without_kek_raises(monkeypatch) -> None:
     from app.keystore import decrypt_pem
     with pytest.raises(RuntimeError, match="LICENSE_KEY_ENCRYPTION_KEY is unset"):
         decrypt_pem(wrapped)
+
+
+def test_encrypt_secret_handles_none(monkeypatch) -> None:
+    """`encrypt_secret(None)` must pass through so callers can pipe optional
+    fields without branching, e.g. `model.field = encrypt_secret(form_value)`
+    when form_value is allowed to be None."""
+    monkeypatch.setenv("LICENSE_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    _reload_config()
+    from app.keystore import decrypt_secret, encrypt_secret
+    assert encrypt_secret(None) is None
+    assert decrypt_secret(None) is None
+
+
+def test_encrypt_secret_idempotent(monkeypatch) -> None:
+    """Double-wrap protection: passing an already-encrypted value back into
+    encrypt_secret returns it unchanged. Matters for the migration path
+    where the row may have been rewrapped by an earlier upgrade run."""
+    monkeypatch.setenv("LICENSE_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    _reload_config()
+    from app.keystore import encrypt_secret, is_encrypted
+    wrapped = encrypt_secret("plaintext")
+    assert is_encrypted(wrapped)
+    twice = encrypt_secret(wrapped)
+    assert twice == wrapped

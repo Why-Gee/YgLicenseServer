@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import HTTPException, Request
@@ -17,6 +16,7 @@ from itsdangerous import BadSignature, URLSafeSerializer
 from markupsafe import Markup
 
 from app import __version__
+from app._time import utcnow as _utcnow
 from app.config import get_settings
 from app.security import check_csrf, csrf_token
 
@@ -83,8 +83,9 @@ def _error_message(code: str | None) -> str | None:
 templates.env.globals["error_message"] = _error_message
 
 
-def utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
+# Re-export under the legacy name `utcnow` so existing call sites in this
+# package keep working without touching every import.
+utcnow = _utcnow
 
 
 def serializer() -> URLSafeSerializer:

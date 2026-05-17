@@ -13,11 +13,12 @@ import logging
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
 from app import webhooks as wh
+from app._time import utcnow as _utcnow
 from app.models import Customer, Event, Install, License, Product
 from app.security import is_safe_url_shape
 from app.services.errors import Unsafe, ValidationFailed
@@ -25,10 +26,6 @@ from app.services.errors import Unsafe, ValidationFailed
 log = logging.getLogger("license-server.services.licenses")
 
 Scheduler = Callable[[Callable[[], None]], None]
-
-
-def _utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _run(fn: Callable[[], None], schedule: Scheduler | None) -> None:
@@ -74,11 +71,15 @@ def issue_license(
     else:
         cust = db.query(Customer).filter_by(email=email).one_or_none()
     if cust is None:
+        # First license for this customer -- safe to set the name from the
+        # form because no other product is currently using a different one.
         cust = Customer(email=email, name=name_clean, stripe_customer_id=stripe_customer_id)
         db.add(cust)
         db.flush()
-    elif name_clean and cust.name != name_clean:
-        cust.name = name_clean
+    # Renaming an EXISTING customer must be an explicit action against the
+    # customer (POST /admin/customers/{id}/edit), not a side effect of
+    # issuing a license for an unrelated product they happen to own. The
+    # caller's `name=...` is silently ignored in this branch by design.
 
     webhook_url_clean = (webhook_url or "").strip() or None
     if webhook_url_clean and not is_safe_url_shape(webhook_url_clean, allow_http=True):
@@ -225,17 +226,18 @@ def edit_license(
     plan: str,
     max_users: int,
     valid_until_raw: str,
-    customer_name: str = "",
     features_json: str = "{}",
     webhook_url: str = "",
     rotate_secret: bool = False,
     note: str = "service/edit",
     schedule: Scheduler | None = None,
 ) -> EditResult:
-    """Edit a license. Mirrors the UI form's full semantics: parse features
-    JSON, parse valid_until (date or datetime), apply customer_name overwrite,
-    apply webhook config with mint_on_url_change=True, fire license.updated
-    on any change.
+    """Edit a license's per-license fields: plan, max_users, valid_until,
+    features, and webhook config. Does NOT touch the linked Customer -- a
+    Customer is a tenant-wide row (one per email across all products on this
+    server), so renaming the customer from a license-edit form would silently
+    rename the same person on every other product. Rename via the dedicated
+    /admin/customers/{id}/edit endpoint instead.
     """
     try:
         features = json.loads(features_json) if features_json.strip() else {}
@@ -266,11 +268,6 @@ def edit_license(
     lic.max_users = max_users
     lic.valid_until = new_valid_until
     lic.features = features
-
-    name_clean = customer_name.strip() or None
-    if (lic.customer.name or None) != name_clean:
-        changed.append("customer_name")
-    lic.customer.name = name_clean
 
     new_url = webhook_url.strip() or None
     prev_secret = lic.webhook_secret
@@ -358,36 +355,106 @@ def test_webhook(lic: License) -> WebhookTestResult:
 # ----- delete -----------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class _DeletedLicenseSnapshot:
+    """Everything we need to fire the post-commit webhook for a deleted
+    license. Captured before the row is gone so the webhook task doesn't
+    try to dereference an ORM-detached instance."""
+
+    license_id: str
+    key: str
+    product_slug: str
+    customer_email: str
+    webhook_url: str | None
+    webhook_secret: str | None
+
+
+def _delete_license_in_tx(
+    db: Session, lic: License, *, note: str
+) -> _DeletedLicenseSnapshot:
+    """Stage one license's deletion inside the current transaction. Does NOT
+    commit -- the caller is responsible for one commit per logical operation
+    so a partial failure rolls the whole batch back.
+
+    Mutations applied:
+      - INSERT audit Event(license:deleted) with snapshot payload
+      - UPDATE events SET license_id=NULL for this license (audit survives)
+      - DELETE installs WHERE license_id=this
+      - DELETE this license row
+
+    Returns the snapshot the caller needs to fan out the license.deleted
+    webhook after commit succeeds. Webhook delivery NEVER happens before
+    commit -- if the transaction rolls back, no spurious webhook leaks out.
+    """
+    snapshot = _DeletedLicenseSnapshot(
+        license_id=lic.id,
+        key=lic.key,
+        product_slug=lic.product.slug,
+        customer_email=lic.customer.email,
+        webhook_url=lic.webhook_url,
+        webhook_secret=lic.webhook_secret,
+    )
+    db.add(Event(
+        product_id=lic.product_id, type="license:deleted",
+        payload={
+            "license_id": snapshot.license_id,
+            "key": snapshot.key,
+            "product_slug": snapshot.product_slug,
+            "customer_email": snapshot.customer_email,
+        }, note=note,
+    ))
+    db.query(Event).filter_by(license_id=lic.id).update({"license_id": None})
+    db.query(Install).filter_by(license_id=lic.id).delete()
+    db.delete(lic)
+    return snapshot
+
+
+def _fire_deleted_webhook(snap: _DeletedLicenseSnapshot) -> None:
+    if not snap.webhook_url or not snap.webhook_secret:
+        return
+    wh.deliver_deleted(
+        webhook_url=snap.webhook_url,
+        webhook_secret=snap.webhook_secret,
+        license_id=snap.license_id,
+        key=snap.key,
+        product_slug=snap.product_slug,
+        customer_email=snap.customer_email,
+    )
+
+
 def delete_license(
     db: Session, lic: License, *,
     schedule: Scheduler | None = None,
     note: str = "service/delete",
 ) -> None:
-    """Delete a license + cascade installs. Fires a license.deleted webhook
-    after commit (the row is gone, so we snapshot the fields beforehand).
-    Audit event rows for this license get license_id NULL'd so history stays.
-    """
-    webhook_url = lic.webhook_url
-    webhook_secret = lic.webhook_secret
-    snapshot = {
-        "license_id": lic.id,
-        "key": lic.key,
-        "product_slug": lic.product.slug,
-        "customer_email": lic.customer.email,
-    }
-    db.add(Event(
-        product_id=lic.product_id, type="license:deleted",
-        payload=snapshot, note=note,
-    ))
-    db.query(Event).filter_by(license_id=lic.id).update({"license_id": None})
-    db.query(Install).filter_by(license_id=lic.id).delete()
-    db.delete(lic)
-    db.commit()
+    """Delete a single license + cascade installs in one transaction. Fires
+    a license.deleted webhook AFTER commit (the row is gone, so the snapshot
+    captured pre-commit is what the webhook task uses).
 
-    if webhook_url and webhook_secret:
-        _run(
-            lambda: wh.deliver_deleted(
-                webhook_url=webhook_url, webhook_secret=webhook_secret, **snapshot
-            ),
-            schedule,
-        )
+    For bulk deletion (multiple licenses, or a product-cascade), use
+    `delete_licenses_bulk` -- it batches everything into a single commit so
+    a mid-loop failure rolls the entire group back.
+    """
+    snap = _delete_license_in_tx(db, lic, note=note)
+    db.commit()
+    _run(lambda: _fire_deleted_webhook(snap), schedule)
+
+
+def delete_licenses_bulk(
+    db: Session, licenses: list[License], *,
+    schedule: Scheduler | None = None,
+    note: str = "service/delete",
+) -> list[_DeletedLicenseSnapshot]:
+    """Delete N licenses atomically: stage every delete inside one tx, then
+    commit once, then fan out one webhook per license post-commit.
+
+    Either all licenses get deleted (and their webhooks fire) or none do
+    (commit rolls back, caller sees the SQLAlchemy exception). Returns the
+    snapshots so the caller can report a per-license result (e.g. UI redirect
+    counters).
+    """
+    snapshots = [_delete_license_in_tx(db, lic, note=note) for lic in licenses]
+    db.commit()
+    for snap in snapshots:
+        _run(lambda s=snap: _fire_deleted_webhook(s), schedule)
+    return snapshots

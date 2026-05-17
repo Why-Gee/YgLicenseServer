@@ -52,7 +52,7 @@
           <td><a href="/admin/products/{{ p.slug }}"><code>{{ p.slug }}</code></a></td>
           <td>{{ p.name }}</td>
           <td><code>{{ p.key_prefix }}_</code></td>
-          <td>{{ p.licenses | length }}</td>
+          <td>{{ license_counts[p.id] }}</td>
           <td class="muted">{{ p.created_at.strftime('%Y-%m-%d') }}</td>
           <td>
             <button type="submit" class="btn-icon"
