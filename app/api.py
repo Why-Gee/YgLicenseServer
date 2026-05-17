@@ -12,35 +12,32 @@ Admin (Bearer ADMIN_TOKEN):
   GET  /v1/admin/products/<slug>/licenses
   POST /v1/admin/licenses/<id>/revoke
   GET  /v1/admin/customers
+
+Heavy lifting lives in `app.services.*`; this module is HTTP plumbing only.
 """
 from __future__ import annotations
 
 import hashlib
 import logging
-import re
-import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app import webhooks
 from app.config import get_settings
 from app.db import get_db
-from app.email import send_license_email
-from app.keystore import encrypt_pem
-from app.models import Customer, Event, Install, License, Product
-from app.security import check_admin_bearer, is_safe_url_shape
-from app.signing import generate_keypair, sign_license_jwt
+from app.models import Customer, License
+from app.security import check_admin_bearer
+from app.services import licenses as licenses_svc
+from app.services import products as products_svc
+from app.services.check import CheckRejected, check_license
+from app.services.errors import Conflict, NotFound, ValidationFailed
 
 log = logging.getLogger("license-server.api")
 
 router = APIRouter()
-
-_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
-_PREFIX_RE = re.compile(r"^[a-z0-9_]{1,15}$")
 
 
 # ---------- /v1/check ----------------------------------------------------
@@ -67,19 +64,10 @@ class CheckOut(BaseModel):
     webhook_secret: str
 
 
-def _utcnow() -> datetime:
-    """Naive UTC. Models still store tz-naive DateTime columns; use this
-    everywhere we previously called datetime.utcnow() so the deprecation
-    warning is gone but stored values stay comparable to existing rows."""
-    return datetime.now(UTC).replace(tzinfo=None)
-
-
 def _client_ip_hash(request: Request) -> str | None:
     """SHA256 of the originating IP. Reads X-Forwarded-For when the request
     came through a trusted proxy (Caddy in our deploy), falling back to the
-    direct socket peer. Without this every request behind the reverse-proxy
-    hashed `127.0.0.1`, making the column useless for per-tenant install
-    tracking.
+    direct socket peer.
 
     Trust model: we only honor X-Forwarded-For when the immediate peer
     (request.client.host) is loopback. In our deploy Caddy listens on
@@ -92,9 +80,7 @@ def _client_ip_hash(request: Request) -> str | None:
     peer = request.client.host
     src = peer
     if peer in ("127.0.0.1", "::1") and "x-forwarded-for" in request.headers:
-        # XFF is a comma-separated list; the LEFTMOST entry is the original
-        # client. Each subsequent proxy appends, so the right side is closer
-        # to us. We strip whitespace and take the first non-empty token.
+        # XFF is comma-separated; LEFTMOST entry is the original client.
         xff = request.headers["x-forwarded-for"]
         first = next((p.strip() for p in xff.split(",") if p.strip()), None)
         if first:
@@ -104,74 +90,20 @@ def _client_ip_hash(request: Request) -> str | None:
 
 @router.post("/v1/check", response_model=CheckOut)
 def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> CheckOut:
-    lic = db.query(License).filter_by(key=body.key).one_or_none()
-    if lic is None:
-        raise HTTPException(status_code=401, detail={"reason": "invalid_key"})
-    if lic.status == "revoked":
-        raise HTTPException(status_code=401, detail={"reason": "revoked"})
-    if lic.status == "disabled":
-        raise HTTPException(status_code=401, detail={"reason": "disabled"})
-    if lic.valid_until < _utcnow():
-        raise HTTPException(status_code=401, detail={"reason": "expired"})
-
-    # Self-registered webhook URL. Strip trailing slash, validate, upsert
-    # only when changed so we don't churn the row on every heartbeat.
-    if body.public_url is not None and body.public_url.strip():
-        candidate = body.public_url.strip().rstrip("/")
-        if len(candidate) > 500 or not is_safe_url_shape(candidate, allow_http=True):
-            # SSRF guard — refuse URLs that resolve to private/loopback/
-            # link-local addresses or end in *.local / *.internal / etc.
-            # We otherwise accept http+https here so dev installs against
-            # public-DNS hostnames over plain http still work (cloudflared
-            # tunnel front-doors that terminate TLS upstream).
-            raise HTTPException(status_code=400, detail={"reason": "invalid_public_url"})
-        if lic.webhook_url != candidate:
-            log.info("license %s webhook_url updated to %s", lic.id, candidate)
-            lic.webhook_url = candidate
-
-    # Ensure a webhook_secret always exists -- receivers need it to verify
-    # inbound pushes, and self-registering installs can't bootstrap one any
-    # other way. Generated lazily on first phone-home; idempotent thereafter.
-    if not lic.webhook_secret:
-        lic.webhook_secret = webhooks.generate_secret()
-
-    ip_hash = _client_ip_hash(request)
-    install = (
-        db.query(Install)
-        .filter_by(license_id=lic.id, install_id=body.install_id)
-        .one_or_none()
-    )
-    if install is None:
-        install = Install(
-            license_id=lic.id,
+    try:
+        result = check_license(
+            db,
+            key=body.key,
             install_id=body.install_id,
             version=body.version,
-            ip_addr_hash=ip_hash,
+            public_url=body.public_url,
+            client_ip_hash=_client_ip_hash(request),
         )
-        db.add(install)
-    else:
-        install.version = body.version
-        install.last_seen_at = _utcnow()
-        install.ip_addr_hash = ip_hash
-
-    token, _exp = sign_license_jwt(
-        product=lic.product,
-        license_id=lic.id,
-        install_id=body.install_id,
-        plan=lic.plan,
-        max_users=lic.max_users,
-        features=lic.features or {},
-        valid_until=lic.valid_until,
-    )
-    db.add(Event(
-        license_id=lic.id,
-        product_id=lic.product_id,
-        type="heartbeat",
-        payload={"version": body.version, "install_id": body.install_id},
-    ))
-    db.commit()
+    except CheckRejected as e:
+        raise HTTPException(status_code=e.http_status, detail={"reason": e.reason}) from e
+    lic = result.license
     return CheckOut(
-        jwt=token,
+        jwt=result.jwt,
         valid_until=lic.valid_until,
         features=lic.features or {},
         max_users=lic.max_users,
@@ -185,9 +117,10 @@ def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> Che
 
 @router.get("/v1/products/{slug}/pubkey", response_class=PlainTextResponse)
 def get_pubkey(slug: str, db: Session = Depends(get_db)) -> str:
-    p = db.query(Product).filter_by(slug=slug).one_or_none()
-    if p is None:
-        raise HTTPException(status_code=404, detail="product not found")
+    try:
+        p = products_svc.get_product(db, slug)
+    except NotFound as e:
+        raise HTTPException(status_code=404, detail="product not found") from e
     return p.public_key_pem
 
 
@@ -227,29 +160,20 @@ class CreateProductOut(BaseModel):
     dependencies=[Depends(_require_admin)],
 )
 def admin_create_product(body: CreateProductIn, db: Session = Depends(get_db)) -> CreateProductOut:
-    if not _SLUG_RE.match(body.slug):
-        raise HTTPException(status_code=400, detail="invalid slug (lowercase a-z0-9-, max 63)")
-    if not _PREFIX_RE.match(body.key_prefix):
-        raise HTTPException(status_code=400, detail="invalid key_prefix (lowercase a-z0-9_, max 15)")
-    if db.query(Product).filter_by(slug=body.slug).one_or_none():
-        raise HTTPException(status_code=409, detail="slug already exists")
-
-    priv_pem, pub_pem = generate_keypair()
-    p = Product(
-        slug=body.slug,
-        name=body.name,
-        description=body.description,
-        public_key_pem=pub_pem,
-        private_key_pem=encrypt_pem(priv_pem),
-        key_prefix=body.key_prefix,
-        stripe_webhook_secret=body.stripe_webhook_secret,
-        stripe_api_key=body.stripe_api_key,
-        jwt_issuer=body.jwt_issuer or f"{body.slug}-license-server",
-    )
-    db.add(p)
-    db.add(Event(product_id=p.id, type="product:created", payload={"slug": body.slug}))
-    db.commit()
-    db.refresh(p)
+    try:
+        p = products_svc.create_product(
+            db,
+            slug=body.slug, name=body.name, key_prefix=body.key_prefix,
+            description=body.description,
+            jwt_issuer=body.jwt_issuer,
+            stripe_webhook_secret=body.stripe_webhook_secret,
+            stripe_api_key=body.stripe_api_key,
+            validate_format=True,
+        )
+    except ValidationFailed as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Conflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     return CreateProductOut(id=p.id, slug=p.slug, name=p.name, public_key_pem=p.public_key_pem)
 
 
@@ -264,15 +188,16 @@ def admin_list_products(db: Session = Depends(get_db)) -> list[dict]:
             "license_count": len(p.licenses),
             "created_at": p.created_at.isoformat(),
         }
-        for p in db.query(Product).order_by(Product.created_at.desc()).all()
+        for p in products_svc.list_products(db)
     ]
 
 
 @router.get("/v1/admin/products/{slug}", dependencies=[Depends(_require_admin)])
 def admin_get_product(slug: str, db: Session = Depends(get_db)) -> dict:
-    p = db.query(Product).filter_by(slug=slug).one_or_none()
-    if p is None:
-        raise HTTPException(status_code=404, detail="product not found")
+    try:
+        p = products_svc.get_product(db, slug)
+    except NotFound as e:
+        raise HTTPException(status_code=404, detail="product not found") from e
     return {
         "id": p.id,
         "slug": p.slug,
@@ -310,52 +235,31 @@ class IssueOut(BaseModel):
     dependencies=[Depends(_require_admin)],
 )
 def admin_issue(slug: str, body: IssueIn, db: Session = Depends(get_db)) -> IssueOut:
-    p = db.query(Product).filter_by(slug=slug).one_or_none()
-    if p is None:
-        raise HTTPException(status_code=404, detail="product not found")
-    cust = (
-        db.query(Customer).filter_by(email=body.email).one_or_none()
-        if body.stripe_customer_id is None
-        else db.query(Customer).filter_by(stripe_customer_id=body.stripe_customer_id).one_or_none()
+    try:
+        p = products_svc.get_product(db, slug)
+    except NotFound as e:
+        raise HTTPException(status_code=404, detail="product not found") from e
+    result = licenses_svc.issue_license(
+        db, product=p,
+        email=body.email, name=body.name,
+        plan=body.plan, max_users=body.max_users,
+        valid_days=body.valid_days, features=body.features,
+        stripe_customer_id=body.stripe_customer_id,
+        note="admin/issue",
+        send_email=True,
     )
-    name_clean = (body.name or "").strip() or None
-    if cust is None:
-        cust = Customer(
-            email=body.email,
-            name=name_clean,
-            stripe_customer_id=body.stripe_customer_id,
-        )
-        db.add(cust)
-        db.flush()
-    elif name_clean and cust.name != name_clean:
-        cust.name = name_clean
-    key = f"{p.key_prefix}_" + secrets.token_urlsafe(32)
-    lic = License(
-        product_id=p.id,
-        customer_id=cust.id,
-        key=key,
-        plan=body.plan,
-        max_users=body.max_users,
-        features=body.features,
-        valid_until=_utcnow() + timedelta(days=body.valid_days),
-        status="active",
+    return IssueOut(
+        license_id=result.license.id, key=result.license.key,
+        valid_until=result.license.valid_until, product=p.slug,
     )
-    db.add(lic)
-    db.add(Event(
-        license_id=lic.id, product_id=p.id, type="issued",
-        payload={"plan": body.plan}, note="admin/issue",
-    ))
-    db.commit()
-    db.refresh(lic)
-    send_license_email(to=cust.email, key=lic.key, product_name=p.name)
-    return IssueOut(license_id=lic.id, key=lic.key, valid_until=lic.valid_until, product=p.slug)
 
 
 @router.get("/v1/admin/products/{slug}/licenses", dependencies=[Depends(_require_admin)])
 def admin_list_licenses(slug: str, limit: int = 200, db: Session = Depends(get_db)) -> list[dict]:
-    p = db.query(Product).filter_by(slug=slug).one_or_none()
-    if p is None:
-        raise HTTPException(status_code=404, detail="product not found")
+    try:
+        p = products_svc.get_product(db, slug)
+    except NotFound as e:
+        raise HTTPException(status_code=404, detail="product not found") from e
     rows = (
         db.query(License)
         .filter_by(product_id=p.id)
@@ -365,15 +269,10 @@ def admin_list_licenses(slug: str, limit: int = 200, db: Session = Depends(get_d
     )
     return [
         {
-            "id": r.id,
-            "key": r.key,
-            "plan": r.plan,
-            "status": r.status,
-            "max_users": r.max_users,
-            "features": r.features,
+            "id": r.id, "key": r.key, "plan": r.plan, "status": r.status,
+            "max_users": r.max_users, "features": r.features,
             "valid_until": r.valid_until.isoformat(),
-            "customer": r.customer.email,
-            "customer_name": r.customer.name,
+            "customer": r.customer.email, "customer_name": r.customer.name,
             "created_at": r.created_at.isoformat(),
         }
         for r in rows
@@ -385,12 +284,10 @@ def admin_revoke(lid: str, db: Session = Depends(get_db)) -> dict:
     lic = db.query(License).filter_by(id=lid).one_or_none()
     if lic is None:
         raise HTTPException(status_code=404, detail="license not found")
-    lic.status = "revoked"
-    db.add(Event(
-        license_id=lic.id, product_id=lic.product_id, type="status:revoked",
-        note="admin/revoke",
-    ))
-    db.commit()
+    # No schedule= — JSON callers don't have BackgroundTasks. Webhook (if any)
+    # fires synchronously after commit. Historically the JSON path didn't
+    # fire any webhook at all; now it matches the UI path's behavior.
+    licenses_svc.revoke_license(db, lic, note="admin/revoke")
     return {"id": lic.id, "status": lic.status}
 
 
@@ -398,9 +295,7 @@ def admin_revoke(lid: str, db: Session = Depends(get_db)) -> dict:
 def admin_customers(db: Session = Depends(get_db)) -> list[dict]:
     return [
         {
-            "id": c.id,
-            "email": c.email,
-            "name": c.name,
+            "id": c.id, "email": c.email, "name": c.name,
             "stripe_customer_id": c.stripe_customer_id,
             "license_count": len(c.licenses),
             "created_at": c.created_at.isoformat(),
