@@ -1,8 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ product.slug }}{% endblock %}
+{% block topbar_title %}<a href="/admin/products">← Products</a>{{ product.name }} <code>{{ product.slug }}</code>{% endblock %}
 {% block content %}
-<p class="muted"><a href="/admin">← Dashboard</a></p>
-<h1>{{ product.name }} <code style="font-size:.6em;">{{ product.slug }}</code></h1>
 
 {% if request.query_params.get('issued') %}
 <div class="success">license issued. find the key in the table below — copy it now (we don't show it again in plain text). if a webhook URL was set, the signing secret is shown in the edit modal and is also only displayed once.</div>

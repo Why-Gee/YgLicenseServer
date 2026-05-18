@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}New Product{% endblock %}
+{% block topbar_title %}<a href="/admin/products">← Products</a>New Product{% endblock %}
 {% block content %}
-<h1>New Product</h1>
 <p class="muted">creating a product generates a fresh ed25519 keypair. private key stays in the database; public key gets baked into the client app's image.</p>
 
 <form method="post" action="/admin/products" class="card" style="max-width:600px;">
