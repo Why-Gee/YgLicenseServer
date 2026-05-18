@@ -11,48 +11,58 @@
     a { color:var(--accent); text-decoration:none; }
     a:hover { text-decoration:underline; }
     /* ===== Sidebar layout ===================================================
-       Fixed-position left rail with icon+label nav items. CSS variable
-       --sidebar-w drives both its width and the page's content-shift. A
-       data-collapsed="1" attribute on <body> flips to the narrow variant
-       (icons-only); admin.js persists the state in localStorage.
+       Three pieces, all fixed:
+       1. `.brand-corner`   -- top-left, always full sidebar-w. Holds brand
+                               + hamburger. Never changes width.
+       2. `.sidebar`        -- nav + footer, starts below the brand corner.
+                               Width shrinks to --sidebar-w-collapsed when
+                               body[data-collapsed="1"].
+       3. `.topbar`         -- to the right of the brand corner, also never
+                               changes left (since the brand corner pins
+                               the layout's top-left at sidebar-w).
+       The hamburger only toggles (2); (1) and (3) stay put.
     */
     body[data-has-sidebar="1"] { padding-left:var(--sidebar-w); transition:padding-left .15s ease; }
     body[data-has-sidebar="1"][data-collapsed="1"] { padding-left:var(--sidebar-w-collapsed); }
-    .sidebar {
-      position:fixed; top:0; left:0; bottom:0; width:var(--sidebar-w);
-      background:var(--card); border-right:1px solid var(--bd);
-      display:flex; flex-direction:column;
-      transition:width .15s ease; z-index:50;
-    }
-    body[data-collapsed="1"] .sidebar { width:var(--sidebar-w-collapsed); }
-    .sidebar-header {
+    .brand-corner {
+      position:fixed; top:0; left:0;
+      width:var(--sidebar-w);
+      height:var(--topbar-h);
       display:flex; align-items:center; gap:.6em;
-      padding:0 1em; border-bottom:1px solid var(--bd);
-      height:var(--topbar-h); /* aligns with the static topbar to its right */
-      flex-shrink:0;          /* never collapses when nav grows */
-      position:sticky; top:0; background:var(--card); z-index:2;
+      padding:0 1em;
+      background:var(--card);
+      border-right:1px solid var(--bd);
+      border-bottom:1px solid var(--bd);
+      z-index:51;
     }
-    .sidebar-header a.brand {
+    .brand-corner a.brand {
       display:flex; align-items:baseline; gap:.5em;
       color:var(--fg); font-weight:600; font-size:.95em;
       white-space:nowrap; overflow:hidden;
     }
-    .sidebar-header a.brand:hover { text-decoration:none; color:var(--accent); }
-    .sidebar-header a.brand svg { align-self:center; }  /* icon vertically centered to the title row */
+    .brand-corner a.brand:hover { text-decoration:none; color:var(--accent); }
+    .brand-corner a.brand svg { align-self:center; }
     .sidebar-version {
       color:var(--muted); font-size:.75em;
       font-family:Menlo,Consolas,monospace;
       /* baseline-aligned with the YgLicenseServer text */
     }
-    body[data-collapsed="1"] .sidebar-header .brand-text,
-    body[data-collapsed="1"] .sidebar-version,
-    body[data-collapsed="1"] .nav-label { display:none; }
     .sidebar-toggle {
       background:transparent; border:0; color:var(--muted); cursor:pointer;
       padding:.4em; border-radius:4px; line-height:0; margin-left:auto;
     }
     .sidebar-toggle:hover { background:#21262d; color:var(--fg); }
-    body[data-collapsed="1"] .sidebar-toggle { margin-left:0; }
+    .sidebar {
+      position:fixed;
+      top:var(--topbar-h); /* sits below the brand corner */
+      left:0; bottom:0;
+      width:var(--sidebar-w);
+      background:var(--card); border-right:1px solid var(--bd);
+      display:flex; flex-direction:column;
+      transition:width .15s ease; z-index:50;
+    }
+    body[data-collapsed="1"] .sidebar { width:var(--sidebar-w-collapsed); }
+    body[data-collapsed="1"] .nav-label { display:none; }
     .sidebar-nav { flex:1; overflow-y:auto; padding:.5em 0; }
     .sidebar-nav a {
       display:flex; align-items:center; gap:.75em;
@@ -90,7 +100,8 @@
       padding:0 1.5em; z-index:30;
       transition:left .15s ease;
     }
-    body[data-collapsed="1"] .topbar { left:var(--sidebar-w-collapsed); }
+    /* Topbar's left edge does NOT change on collapse -- the brand corner
+       pins the top-left at sidebar-w forever. */
     .topbar .topbar-title { margin:0; font-size:1.4em; font-weight:600; color:var(--fg); line-height:1.2; }
     .topbar .topbar-title code { font-size:.7em; color:var(--muted); background:transparent; padding:0; margin-left:.5em; }
     .topbar .topbar-title a { color:var(--muted); font-size:.7em; font-weight:400; margin-right:.6em; }
@@ -104,13 +115,12 @@
     @media (max-width: 768px) {
       body[data-has-sidebar="1"] { padding-left:0; }
       .topbar { display:none; }
+      .brand-corner { display:none; }
       body[data-has-sidebar="1"] main { padding-top:1em; }
-      .sidebar { transform:translateX(-100%); width:var(--sidebar-w) !important; box-shadow:4px 0 20px rgba(0,0,0,.5); }
+      .sidebar { top:0; transform:translateX(-100%); width:var(--sidebar-w) !important; box-shadow:4px 0 20px rgba(0,0,0,.5); }
       body[data-mobile-open="1"] .sidebar { transform:translateX(0); }
       body[data-collapsed="1"] .sidebar { width:var(--sidebar-w) !important; }
       body[data-collapsed="1"] .nav-label,
-      body[data-collapsed="1"] .brand-text,
-      body[data-collapsed="1"] .sidebar-version,
       body[data-collapsed="1"] .logout-label { display:inline !important; }
       .mobile-topbar {
         display:flex; align-items:center; gap:.6em;
@@ -209,26 +219,24 @@
     <a href="/admin" class="brand" style="color:var(--fg);font-weight:600;">YgLicenseServer</a>
   </div>
   <div class="mobile-overlay" id="mobile-overlay"></div>
+  <div class="brand-corner">
+    <a href="/admin" class="brand">
+      <!-- Brand mark: small key icon. -->
+      <svg width="22" height="22" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M0 8a4 4 0 0 1 7.465-2H14a.5.5 0 0 1 .354.146l1.5 1.5a.5.5 0 0 1 0 .708l-1.5 1.5a.5.5 0 0 1-.708 0L13 9.207l-.646.647a.5.5 0 0 1-.708 0L11 9.207l-.646.647a.5.5 0 0 1-.708 0L9 9.207l-.646.647A.5.5 0 0 1 8 10h-.535A4 4 0 0 1 0 8m4-3a3 3 0 1 0 2.712 4.285A.5.5 0 0 1 7.163 9h.63l.853-.854a.5.5 0 0 1 .708 0l.646.647.646-.647a.5.5 0 0 1 .708 0l.646.647.646-.647a.5.5 0 0 1 .708 0l.646.647.793-.793-1-1h-6.63a.5.5 0 0 1-.451-.285A3 3 0 0 0 4 5"/>
+        <path d="M4 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0"/>
+      </svg>
+      <span class="brand-text">YgLicenseServer</span>
+      {% if app_version %}<span class="sidebar-version brand-text">v{{ app_version }}</span>{% endif %}
+    </a>
+    <button type="button" class="sidebar-toggle" id="sidebar-toggle"
+            aria-label="Toggle sidebar" title="Toggle sidebar (Ctrl+B)">
+      <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" id="sidebar-toggle-icon">
+        <path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5"/>
+      </svg>
+    </button>
+  </div>
   <aside class="sidebar" aria-label="Primary navigation">
-    <div class="sidebar-header">
-      <a href="/admin" class="brand">
-        <!-- Brand mark: small key icon for the icon-only collapsed state. -->
-        <svg width="22" height="22" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M0 8a4 4 0 0 1 7.465-2H14a.5.5 0 0 1 .354.146l1.5 1.5a.5.5 0 0 1 0 .708l-1.5 1.5a.5.5 0 0 1-.708 0L13 9.207l-.646.647a.5.5 0 0 1-.708 0L11 9.207l-.646.647a.5.5 0 0 1-.708 0L9 9.207l-.646.647A.5.5 0 0 1 8 10h-.535A4 4 0 0 1 0 8m4-3a3 3 0 1 0 2.712 4.285A.5.5 0 0 1 7.163 9h.63l.853-.854a.5.5 0 0 1 .708 0l.646.647.646-.647a.5.5 0 0 1 .708 0l.646.647.646-.647a.5.5 0 0 1 .708 0l.646.647.793-.793-1-1h-6.63a.5.5 0 0 1-.451-.285A3 3 0 0 0 4 5"/>
-          <path d="M4 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0"/>
-        </svg>
-        <span class="brand-text">YgLicenseServer</span>
-        {% if app_version %}<span class="sidebar-version brand-text">v{{ app_version }}</span>{% endif %}
-      </a>
-      <button type="button" class="sidebar-toggle" id="sidebar-toggle"
-              aria-label="Toggle sidebar" title="Toggle sidebar (Ctrl+B)">
-        <!-- Hamburger menu glyph (three horizontal bars). Universally
-             recognized as a menu / nav toggle; renders cleanly at any size. -->
-        <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" id="sidebar-toggle-icon">
-          <path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5"/>
-        </svg>
-      </button>
-    </div>
     <nav class="sidebar-nav">
       <a href="/admin" data-nav-key="dashboard" title="Dashboard">
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
