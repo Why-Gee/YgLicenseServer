@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Webhook Deliveries{% endblock %}
+{% block title %}Webhooks{% endblock %}
 {% block content %}
-<h1>Webhook Deliveries</h1>
+<h1>Webhooks</h1>
 
 {% if request.query_params.get('retried') %}
 <div class="success">retry triggered. refresh in a moment to see the result.</div>
@@ -10,7 +10,47 @@
 <div class="error">delivery not found.</div>
 {% endif %}
 
+<p class="muted" style="max-width: 50em;">
+  This page shows the <strong>delivery history</strong> of outbound webhooks
+  — every time the server fired a webhook to a receiver (on a license status
+  change, edit, or delete), and whether it landed. To <em>configure</em> a
+  webhook URL on a license, edit the license from the per-product page.
+</p>
+
+<!-- Configured receivers (the per-license webhook URLs, sourced from the
+     License rows themselves -- this is the "what would fire if anything
+     happened" view). -->
+<div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin-top:0;">Configured receivers ({{ configured_licenses | length }})</h3>
+  {% if configured_licenses %}
+  <table>
+    <thead><tr>
+      <th>Product</th>
+      <th>License key</th>
+      <th>Customer</th>
+      <th>Receiver URL</th>
+    </tr></thead>
+    <tbody>
+    {% for lic in configured_licenses %}
+      <tr>
+        <td><a href="/admin/products/{{ lic.product.slug }}"><code style="font-size:.85em;">{{ lic.product.slug }}</code></a></td>
+        <td><code style="font-size:.8em;">{{ lic.key }}</code></td>
+        <td class="muted">{{ lic.customer.email if lic.customer else '—' }}</td>
+        <td class="muted" style="max-width:24rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{{ lic.webhook_url }}">
+          <code style="font-size:.8em;">{{ lic.webhook_url }}</code>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">no licenses have a webhook URL configured. set one from a license's edit form.</p>
+  {% endif %}
+</div>
+
+<!-- Delivery history (the webhook_deliveries table populated by v0.12+). -->
 <div class="card">
+  <h3 style="margin-top:0;">Delivery history</h3>
   <div style="display:flex; gap:1rem; align-items:center; margin-bottom:.75rem; flex-wrap:wrap;">
     <strong>Status:</strong>
     <a href="/admin/webhook-deliveries"
@@ -30,6 +70,7 @@
       Abandoned ({{ counts.abandoned }})
     </a>
     <span style="flex:1"></span>
+    {% if deliveries %}
     <input
       type="search" placeholder="Filter by url, event type, error…"
       data-filter-target="#deliveries-table"
@@ -37,6 +78,7 @@
       style="flex: 0 0 22rem; padding: .35rem .5rem;"
       aria-label="Filter deliveries" />
     <span class="muted" id="deliveries-filter-count"></span>
+    {% endif %}
   </div>
 
   {% if deliveries %}
@@ -103,7 +145,16 @@
     {% if active_status %}{{ active_status }} {% endif %}deliver{% if deliveries | length == 1 %}y{% else %}ies{% endif %}.
   </p>
   {% else %}
-  <p class="muted">no deliveries {% if active_status %}with status <code>{{ active_status }}</code>{% endif %} yet.</p>
+  <p class="muted" style="margin: .5em 0;">
+    {% if active_status %}
+      no <code>{{ active_status }}</code> deliveries.
+    {% else %}
+      no deliveries yet. a row appears here every time the server fires a webhook
+      (license status change, edit, or delete). to manually trigger one for testing,
+      edit a license and use the <strong>Test webhook</strong> button in its edit form,
+      or change its status (revoke / disable / re-enable).
+    {% endif %}
+  </p>
   {% endif %}
 </div>
 {% endblock %}
