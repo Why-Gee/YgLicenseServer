@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Webhooks{% endblock %}
+{% block title %}Webhook Deliveries{% endblock %}
 {% block content %}
-<h1>Webhooks</h1>
+<h1>Webhook Deliveries</h1>
 
 {% if request.query_params.get('retried') %}
 <div class="success">retry triggered. refresh in a moment to see the result.</div>
