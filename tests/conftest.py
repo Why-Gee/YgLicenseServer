@@ -85,6 +85,8 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
     importlib.reload(ui_cust)
     import app.routers.admin_ui.events as ui_ev
     importlib.reload(ui_ev)
+    import app.routers.admin_ui.webhook_deliveries as ui_wd
+    importlib.reload(ui_wd)
     import app.routers.admin_ui as ui_mod
     importlib.reload(ui_mod)
     import app.main as m
