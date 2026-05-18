@@ -118,45 +118,17 @@ def issue_license(
 # ----- status transitions ------------------------------------------------
 
 
-def _webhook_snapshot(lic: License) -> dict:
-    """Snapshot just the fields a status-change webhook needs, so the
-    scheduled task doesn't try to dereference an ORM-detached row."""
-    return {
-        "url": lic.webhook_url,
-        "secret": lic.webhook_secret,
-        "license_id": lic.id,
-        "license_key": lic.key,
-        "product_slug": lic.product.slug if lic.product else None,
-        "customer_email": lic.customer.email if lic.customer else None,
-        "status": lic.status,
-    }
-
-
-def _deliver_status_change(snapshot: dict, previous_status: str) -> None:
-    if not snapshot["url"] or not snapshot["secret"]:
-        return
-    data = {
-        "license_id": snapshot["license_id"],
-        "license_key": snapshot["license_key"],
-        "key": snapshot["license_key"],
-        "product_slug": snapshot["product_slug"],
-        "customer_email": snapshot["customer_email"],
-        "previous_status": previous_status,
-        "current_status": snapshot["status"],
-    }
-    wh.deliver(
-        url=snapshot["url"], secret=snapshot["secret"],
-        event_type=wh.EVENT_STATUS_CHANGED, data=data,
-    )
-
-
 def set_status(
     db: Session, lic: License, new_status: str, *,
     note: str, schedule: Scheduler | None = None,
 ) -> None:
-    """Apply a status transition and fan the status-change webhook out via
-    `schedule`. Commits before scheduling so receivers POSTing back into
-    /v1/check immediately see the committed state, not a session preview.
+    """Apply a status transition. The webhook (if configured) is enqueued
+    into `webhook_deliveries` inside this same transaction so a rollback
+    drops both the status change and the queue insert; on commit, a fresh
+    session is opened post-response to attempt the first send.
+
+    Failures are NOT lost -- the row stays pending in `webhook_deliveries`
+    for the retry worker to pick up.
     """
     previous = lic.status
     lic.status = new_status
@@ -164,9 +136,26 @@ def set_status(
         license_id=lic.id, product_id=lic.product_id,
         type=f"status:{new_status}", note=note,
     ))
+    delivery_id = None
+    if lic.webhook_url and lic.webhook_secret:
+        data = {
+            "license_id": lic.id,
+            "license_key": lic.key,
+            "key": lic.key,
+            "product_slug": lic.product.slug if lic.product else None,
+            "customer_email": lic.customer.email if lic.customer else None,
+            "previous_status": previous,
+            "current_status": new_status,
+        }
+        d = wh.enqueue(
+            db, url=lic.webhook_url, secret=lic.webhook_secret,
+            event_type=wh.EVENT_STATUS_CHANGED, data=data,
+            license_id=lic.id, product_id=lic.product_id,
+        )
+        delivery_id = d.id
     db.commit()
-    snapshot = _webhook_snapshot(lic)
-    _run(lambda: _deliver_status_change(snapshot, previous), schedule)
+    if delivery_id:
+        _run(lambda: wh.attempt_in_fresh_session(delivery_id), schedule)
 
 
 def revoke_license(db: Session, lic: License, *, note: str = "service/revoke",
@@ -279,8 +268,7 @@ def edit_license(
         payload={"webhook": bool(new_url), "secret_changed": secret_changed},
         note=note,
     ))
-    db.commit()
-
+    delivery_id = None
     if changed and lic.webhook_url and lic.webhook_secret:
         data = {
             "license_id": lic.id,
@@ -291,14 +279,15 @@ def edit_license(
             "status": lic.status,
             "changed_fields": list(changed),
         }
-        url, secret = lic.webhook_url, lic.webhook_secret
-        _run(
-            lambda: wh.deliver(
-                url=url, secret=secret,
-                event_type=wh.EVENT_UPDATED, data=data,
-            ),
-            schedule,
+        d = wh.enqueue(
+            db, url=lic.webhook_url, secret=lic.webhook_secret,
+            event_type=wh.EVENT_UPDATED, data=data,
+            license_id=lic.id, product_id=lic.product_id,
         )
+        delivery_id = d.id
+    db.commit()
+    if delivery_id:
+        _run(lambda: wh.attempt_in_fresh_session(delivery_id), schedule)
     return EditResult(changed_fields=changed, secret_changed=secret_changed)
 
 
@@ -371,20 +360,21 @@ class _DeletedLicenseSnapshot:
 
 def _delete_license_in_tx(
     db: Session, lic: License, *, note: str
-) -> _DeletedLicenseSnapshot:
+) -> tuple[_DeletedLicenseSnapshot, str | None]:
     """Stage one license's deletion inside the current transaction. Does NOT
     commit -- the caller is responsible for one commit per logical operation
     so a partial failure rolls the whole batch back.
 
     Mutations applied:
       - INSERT audit Event(license:deleted) with snapshot payload
+      - INSERT pending WebhookDelivery (if webhook configured) so the
+        delete event lands in the retry queue atomically with the delete
       - UPDATE events SET license_id=NULL for this license (audit survives)
       - DELETE installs WHERE license_id=this
       - DELETE this license row
 
-    Returns the snapshot the caller needs to fan out the license.deleted
-    webhook after commit succeeds. Webhook delivery NEVER happens before
-    commit -- if the transaction rolls back, no spurious webhook leaks out.
+    Returns (snapshot, delivery_id). delivery_id is None when no webhook
+    is configured; otherwise the caller schedules a post-commit attempt.
     """
     snapshot = _DeletedLicenseSnapshot(
         license_id=lic.id,
@@ -403,23 +393,26 @@ def _delete_license_in_tx(
             "customer_email": snapshot.customer_email,
         }, note=note,
     ))
+    delivery_id = None
+    if snapshot.webhook_url and snapshot.webhook_secret:
+        data = {
+            "license_id": snapshot.license_id,
+            "license_key": snapshot.key,
+            "key": snapshot.key,
+            "product_slug": snapshot.product_slug,
+            "customer_email": snapshot.customer_email,
+        }
+        d = wh.enqueue(
+            db, url=snapshot.webhook_url, secret=snapshot.webhook_secret,
+            event_type=wh.EVENT_DELETED, data=data,
+            license_id=None,  # license row is about to disappear
+            product_id=lic.product_id,
+        )
+        delivery_id = d.id
     db.query(Event).filter_by(license_id=lic.id).update({"license_id": None})
     db.query(Install).filter_by(license_id=lic.id).delete()
     db.delete(lic)
-    return snapshot
-
-
-def _fire_deleted_webhook(snap: _DeletedLicenseSnapshot) -> None:
-    if not snap.webhook_url or not snap.webhook_secret:
-        return
-    wh.deliver_deleted(
-        webhook_url=snap.webhook_url,
-        webhook_secret=snap.webhook_secret,
-        license_id=snap.license_id,
-        key=snap.key,
-        product_slug=snap.product_slug,
-        customer_email=snap.customer_email,
-    )
+    return snapshot, delivery_id
 
 
 def delete_license(
@@ -435,9 +428,10 @@ def delete_license(
     `delete_licenses_bulk` -- it batches everything into a single commit so
     a mid-loop failure rolls the entire group back.
     """
-    snap = _delete_license_in_tx(db, lic, note=note)
+    snap, delivery_id = _delete_license_in_tx(db, lic, note=note)
     db.commit()
-    _run(lambda: _fire_deleted_webhook(snap), schedule)
+    if delivery_id:
+        _run(lambda: wh.attempt_in_fresh_session(delivery_id), schedule)
 
 
 def delete_licenses_bulk(
@@ -453,8 +447,9 @@ def delete_licenses_bulk(
     snapshots so the caller can report a per-license result (e.g. UI redirect
     counters).
     """
-    snapshots = [_delete_license_in_tx(db, lic, note=note) for lic in licenses]
+    pairs = [_delete_license_in_tx(db, lic, note=note) for lic in licenses]
     db.commit()
-    for snap in snapshots:
-        _run(lambda s=snap: _fire_deleted_webhook(s), schedule)
-    return snapshots
+    for _snap, delivery_id in pairs:
+        if delivery_id:
+            _run(lambda d=delivery_id: wh.attempt_in_fresh_session(d), schedule)
+    return [snap for snap, _ in pairs]

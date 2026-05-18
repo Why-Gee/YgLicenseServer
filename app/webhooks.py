@@ -5,8 +5,11 @@ license's status (or deletes it), LS POSTs an HMAC-signed JSON body to
 the URL. Receivers verify the signature and react however they want
 (invalidate caches, force phone-home, etc.).
 
-v1: synchronous best-effort delivery — failures logged, no retry queue.
-Phase 2 can add a deliveries table + retry runner when volume justifies.
+v2 (v0.12): durable retry queue. Each delivery is persisted to
+`webhook_deliveries` inside the SAME DB transaction as the state change,
+so a server crash between commit and the first send leaves the row in
+status='pending' for the retry worker to pick up. Backoff schedule:
+1min, 5min, 30min, 2h, 12h, 24h -> abandon after 7 attempts.
 
 Inspired by Stripe's webhook design:
 - X-License-Server-Signature: t=<unix-ts>,v1=<hmac-sha256-hex>
@@ -45,18 +48,39 @@ import logging
 import secrets
 import time
 import uuid
-from typing import Any
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from app._time import utcnow
 from app.http_client import get_client
 from app.security import is_safe_for_delivery
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from app.models import WebhookDelivery
 
 log = logging.getLogger("license-server.webhooks")
 
 EVENT_STATUS_CHANGED = "license.status.changed"
 EVENT_DELETED = "license.deleted"
 EVENT_UPDATED = "license.updated"
+
+# Backoff schedule for retries. Applied AFTER each failure -- the i-th
+# failed attempt schedules the (i+1)-th attempt at now + SCHEDULE[i-1].
+# After MAX_ATTEMPTS failures we give up and mark the delivery 'abandoned';
+# operator can re-trigger manually if they want another shot.
+BACKOFF_SCHEDULE = (
+    timedelta(minutes=1),
+    timedelta(minutes=5),
+    timedelta(minutes=30),
+    timedelta(hours=2),
+    timedelta(hours=12),
+    timedelta(hours=24),
+)
+MAX_ATTEMPTS = len(BACKOFF_SCHEDULE) + 1  # 7 total: initial + 6 retries
 
 
 def generate_secret() -> str:
@@ -75,6 +99,8 @@ def sign(secret: str, timestamp: int, body: bytes) -> str:
 def deliver(
     *, url: str, secret: str, event_type: str, data: dict[str, Any],
     timeout: float = 5.0,
+    event_id: str | None = None,
+    timestamp: int | None = None,
 ) -> tuple[bool, int | None, str | None]:
     """POST a signed event to url. Returns (ok, http_status, error_msg).
 
@@ -86,14 +112,20 @@ def deliver(
     A URL that resolves to a private/loopback IP is refused before sending
     (SSRF guard). DNS failures are not refused; httpx will surface the
     same error path naturally.
+
+    `event_id` + `timestamp` are passed through when retrying a previously-
+    enqueued delivery so the receiver-side dedup-by-event-id keeps working
+    across retries.
     """
     ok_url, reason = is_safe_for_delivery(url, allow_http=True)
     if not ok_url and reason and reason.startswith(("unsafe_url_shape", "resolves_to_private")):
         log.error("refusing webhook to unsafe url: %s (%s)", url, reason)
         return False, None, f"refused:{reason}"
 
-    event_id = str(uuid.uuid4())
-    timestamp = int(time.time())
+    if event_id is None:
+        event_id = str(uuid.uuid4())
+    if timestamp is None:
+        timestamp = int(time.time())
     payload = {
         "id": event_id,
         "type": event_type,
@@ -186,3 +218,99 @@ def deliver_deleted(
         url=webhook_url, secret=webhook_secret,
         event_type=EVENT_DELETED, data=data,
     )
+
+
+# ----- retry-queue plumbing ---------------------------------------------
+
+def enqueue(
+    db: Session, *,
+    url: str, secret: str, event_type: str, data: dict[str, Any],
+    license_id: str | None = None, product_id: str | None = None,
+) -> WebhookDelivery:
+    """Persist a pending delivery row. Call BEFORE the caller's db.commit()
+    so the queue insert is atomic with the state change that triggered the
+    webhook -- a rollback drops both, a commit makes both durable.
+
+    The payload is serialized to JSON now and stored verbatim; retries
+    sign the same bytes so receiver-side timestamp validation is the only
+    thing that needs to budge between attempts."""
+    from app.models import WebhookDelivery
+    d = WebhookDelivery(
+        url=url, secret=secret, event_type=event_type,
+        payload_json=json.dumps(data, separators=(",", ":")),
+        license_id=license_id, product_id=product_id,
+        status="pending",
+        next_attempt_at=utcnow(),
+    )
+    db.add(d)
+    db.flush()  # populate d.id without committing
+    return d
+
+
+def try_deliver(db: Session, delivery_id: str) -> bool:
+    """Attempt one HTTP send for a pending delivery. Updates the row in
+    place: on success status='delivered'; on failure either bumps attempts
+    + schedules the next try, or status='abandoned' if the schedule is
+    exhausted. Caller owns the commit.
+
+    Returns True iff the row transitioned to 'delivered'."""
+    from app.models import WebhookDelivery
+    d = db.query(WebhookDelivery).filter_by(id=delivery_id).one_or_none()
+    if d is None or d.status != "pending":
+        return False
+    try:
+        data = json.loads(d.payload_json)
+    except json.JSONDecodeError as e:
+        d.status = "abandoned"
+        d.last_error = f"payload_decode: {e}"
+        return False
+    # Resign fresh on each attempt so receiver-side replay windows (5min
+    # default) don't reject a backed-off retry. Receiver dedups on the
+    # X-License-Server-Event-Id header which we DON'T regenerate -- so
+    # idempotent receivers see one logical event regardless of retries.
+    ok, status, err = deliver(
+        url=d.url, secret=d.secret, event_type=d.event_type, data=data,
+        event_id=d.id,
+    )
+    d.attempts += 1
+    d.last_attempt_at = utcnow()
+    if ok:
+        d.status = "delivered"
+        d.delivered_at = utcnow()
+        d.last_error = None
+        return True
+    d.last_error = (err or "(no detail)")[:500]
+    if d.attempts >= MAX_ATTEMPTS:
+        d.status = "abandoned"
+        log.warning(
+            "webhook delivery %s abandoned after %d attempts: %s",
+            d.id, d.attempts, d.last_error,
+        )
+        return False
+    backoff = BACKOFF_SCHEDULE[d.attempts - 1]
+    d.next_attempt_at = utcnow() + backoff
+    log.info(
+        "webhook delivery %s will retry in %s (attempt %d/%d)",
+        d.id, backoff, d.attempts, MAX_ATTEMPTS,
+    )
+    return False
+
+
+def attempt_in_fresh_session(delivery_id: str) -> bool:
+    """Wrapper for the post-commit hook: opens a fresh SessionLocal, calls
+    try_deliver, commits. Used by the service-layer `_run(...)` lambdas
+    that fire after the triggering transaction has already closed.
+
+    Returns True iff delivered on this attempt."""
+    from app.db import SessionLocal
+    s = SessionLocal()
+    try:
+        ok = try_deliver(s, delivery_id)
+        s.commit()
+        return ok
+    except Exception:
+        s.rollback()
+        log.exception("post-commit webhook attempt failed")
+        return False
+    finally:
+        s.close()

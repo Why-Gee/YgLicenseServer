@@ -1,0 +1,13 @@
+[Unit]
+Description=YgLicenseServer webhook retry queue drain (every 5 min)
+Requires=yg-license-retry-webhooks.service
+
+[Timer]
+# Fire 2 minutes after boot, then every 5 minutes thereafter.
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
