@@ -260,3 +260,79 @@ document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
     if (input.value) applyFilter(input);
   });
 })();
+
+// Sidebar: collapse/expand toggle (persisted via localStorage), active-link
+// highlight by URL prefix, mobile overlay open/close. The pre-paint script
+// in base.html already applied data-collapsed; here we wire the controls
+// and the resize behavior.
+(function () {
+  var body = document.body;
+  if (body.getAttribute('data-has-sidebar') !== '1') return;  // not logged in
+
+  // ---- active link --------------------------------------------------------
+  // Match the most-specific data-nav-key against the current path. We anchor
+  // on path prefix so /admin/products/asm still highlights "Products".
+  var path = window.location.pathname.replace(/\/+$/, '') || '/admin';
+  var routes = {
+    'dashboard':           function (p) { return p === '/admin'; },
+    'products':            function (p) { return p === '/admin/products' || p.indexOf('/admin/products/') === 0; },
+    'customers':           function (p) { return p === '/admin/customers' || p.indexOf('/admin/customers/') === 0; },
+    'events':              function (p) { return p.indexOf('/admin/events') === 0; },
+    'webhook-deliveries':  function (p) { return p.indexOf('/admin/webhook-deliveries') === 0; },
+  };
+  document.querySelectorAll('.sidebar-nav a[data-nav-key]').forEach(function (a) {
+    var key = a.getAttribute('data-nav-key');
+    if (routes[key] && routes[key](path)) a.classList.add('active');
+  });
+
+  // ---- collapse toggle ---------------------------------------------------
+  var toggle = document.getElementById('sidebar-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function () {
+      var collapsed = body.getAttribute('data-collapsed') === '1';
+      if (collapsed) {
+        body.removeAttribute('data-collapsed');
+        try { localStorage.setItem('yg_sidebar_collapsed', '0'); } catch (e) {}
+        toggle.setAttribute('aria-label', 'Collapse sidebar');
+      } else {
+        body.setAttribute('data-collapsed', '1');
+        try { localStorage.setItem('yg_sidebar_collapsed', '1'); } catch (e) {}
+        toggle.setAttribute('aria-label', 'Expand sidebar');
+      }
+    });
+  }
+
+  // Keyboard shortcut: Ctrl/Cmd + B toggles the sidebar, VS Code style.
+  document.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key && e.key.toLowerCase() === 'b') {
+      // Don't hijack the shortcut while the user is typing in a form field.
+      var t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      if (toggle) toggle.click();
+    }
+  });
+
+  // ---- mobile overlay ----------------------------------------------------
+  var mobileToggle = document.getElementById('mobile-toggle');
+  var mobileOverlay = document.getElementById('mobile-overlay');
+  function closeMobile() { body.removeAttribute('data-mobile-open'); }
+  if (mobileToggle) {
+    mobileToggle.addEventListener('click', function () {
+      body.setAttribute('data-mobile-open', '1');
+    });
+  }
+  if (mobileOverlay) {
+    mobileOverlay.addEventListener('click', closeMobile);
+  }
+  // Tapping any nav link on mobile dismisses the overlay (the link still
+  // navigates -- this just stops the half-open state from lingering during
+  // the page transition).
+  document.querySelectorAll('.sidebar-nav a').forEach(function (a) {
+    a.addEventListener('click', closeMobile);
+  });
+  // ESC closes mobile drawer.
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeMobile();
+  });
+})();

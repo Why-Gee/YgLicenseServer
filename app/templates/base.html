@@ -5,14 +5,86 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{% block title %}YgLicenseServer{% endblock %}</title>
   <style>
-    :root { --bg:#0d1117; --fg:#c9d1d9; --muted:#8b949e; --accent:#58a6ff; --danger:#f85149; --ok:#3fb950; --bd:#30363d; --card:#161b22; }
+    :root { --bg:#0d1117; --fg:#c9d1d9; --muted:#8b949e; --accent:#58a6ff; --danger:#f85149; --ok:#3fb950; --bd:#30363d; --card:#161b22; --sidebar-w:240px; --sidebar-w-collapsed:60px; }
     * { box-sizing: border-box; }
     body { background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; margin:0; }
     a { color:var(--accent); text-decoration:none; }
     a:hover { text-decoration:underline; }
-    nav { background:var(--card); border-bottom:1px solid var(--bd); padding:.7em 1.5em; display:flex; gap:1.5em; align-items:center; }
-    nav a { color:var(--fg); }
-    nav .right { margin-left:auto; }
+    /* ===== Sidebar layout ===================================================
+       Fixed-position left rail with icon+label nav items. CSS variable
+       --sidebar-w drives both its width and the page's content-shift. A
+       data-collapsed="1" attribute on <body> flips to the narrow variant
+       (icons-only); admin.js persists the state in localStorage.
+    */
+    body[data-has-sidebar="1"] { padding-left:var(--sidebar-w); transition:padding-left .15s ease; }
+    body[data-has-sidebar="1"][data-collapsed="1"] { padding-left:var(--sidebar-w-collapsed); }
+    .sidebar {
+      position:fixed; top:0; left:0; bottom:0; width:var(--sidebar-w);
+      background:var(--card); border-right:1px solid var(--bd);
+      display:flex; flex-direction:column;
+      transition:width .15s ease; z-index:50;
+    }
+    body[data-collapsed="1"] .sidebar { width:var(--sidebar-w-collapsed); }
+    .sidebar-header {
+      display:flex; align-items:center; gap:.6em;
+      padding:.9em 1em; border-bottom:1px solid var(--bd);
+      min-height:54px; /* matches the toggle row height when collapsed */
+    }
+    .sidebar-header a.brand { color:var(--fg); font-weight:600; font-size:.95em; white-space:nowrap; overflow:hidden; }
+    .sidebar-header a.brand:hover { text-decoration:none; color:var(--accent); }
+    .sidebar-version { color:var(--muted); font-size:.75em; font-family:Menlo,Consolas,monospace; }
+    body[data-collapsed="1"] .sidebar-header .brand-text,
+    body[data-collapsed="1"] .sidebar-version,
+    body[data-collapsed="1"] .nav-label { display:none; }
+    .sidebar-toggle {
+      background:transparent; border:0; color:var(--muted); cursor:pointer;
+      padding:.4em; border-radius:4px; line-height:0; margin-left:auto;
+    }
+    .sidebar-toggle:hover { background:#21262d; color:var(--fg); }
+    body[data-collapsed="1"] .sidebar-toggle { margin-left:0; }
+    .sidebar-nav { flex:1; overflow-y:auto; padding:.5em 0; }
+    .sidebar-nav a {
+      display:flex; align-items:center; gap:.75em;
+      padding:.6em 1em; color:var(--fg);
+      border-left:3px solid transparent;
+      white-space:nowrap; overflow:hidden;
+    }
+    .sidebar-nav a:hover { background:#21262d; text-decoration:none; }
+    .sidebar-nav a.active {
+      background:rgba(88,166,255,.08);
+      border-left-color:var(--accent);
+      color:var(--accent);
+    }
+    .sidebar-nav a svg { flex-shrink:0; }
+    body[data-collapsed="1"] .sidebar-nav a { justify-content:center; padding:.6em 0; }
+    .sidebar-footer { border-top:1px solid var(--bd); padding:.6em; }
+    .sidebar-footer form { margin:0; }
+    .sidebar-footer button {
+      width:100%; display:flex; align-items:center; gap:.75em;
+      padding:.5em .8em; justify-content:flex-start;
+    }
+    body[data-collapsed="1"] .sidebar-footer button { justify-content:center; padding:.5em 0; }
+    body[data-collapsed="1"] .sidebar-footer .logout-label { display:none; }
+    /* On narrow viewports the sidebar overlays instead of pushing; the
+       toggle button lives in the slim top bar so the user can summon it. */
+    .mobile-topbar { display:none; }
+    @media (max-width: 768px) {
+      body[data-has-sidebar="1"] { padding-left:0; }
+      .sidebar { transform:translateX(-100%); width:var(--sidebar-w) !important; box-shadow:4px 0 20px rgba(0,0,0,.5); }
+      body[data-mobile-open="1"] .sidebar { transform:translateX(0); }
+      body[data-collapsed="1"] .sidebar { width:var(--sidebar-w) !important; }
+      body[data-collapsed="1"] .nav-label,
+      body[data-collapsed="1"] .brand-text,
+      body[data-collapsed="1"] .sidebar-version,
+      body[data-collapsed="1"] .logout-label { display:inline !important; }
+      .mobile-topbar {
+        display:flex; align-items:center; gap:.6em;
+        padding:.6em 1em; background:var(--card); border-bottom:1px solid var(--bd);
+      }
+      .mobile-topbar button { background:transparent; border:0; color:var(--fg); padding:.3em; line-height:0; }
+      .mobile-overlay { position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:40; display:none; }
+      body[data-mobile-open="1"] .mobile-overlay { display:block; }
+    }
     main { max-width:1200px; margin:0 auto; padding:1.5em; }
     h1, h2, h3 { line-height:1.2; }
     table { width:100%; border-collapse:collapse; margin:1em 0; }
@@ -81,21 +153,92 @@
     .toggle-switch.loading .btn-spinner { color:#fff; width:12px; height:12px; border-width:2px; }
   </style>
 </head>
-<body>
+<body{% if request.cookies.get('asm_ls_session') %} data-has-sidebar="1"{% endif %}>
+  <!-- Apply the persisted sidebar-collapsed flag BEFORE first paint so the
+       layout doesn't flash from expanded -> collapsed on every navigation. -->
+  <script>
+    try {
+      if (localStorage.getItem('yg_sidebar_collapsed') === '1') {
+        document.body.setAttribute('data-collapsed', '1');
+      }
+    } catch (e) { /* localStorage disabled; sidebar just stays expanded */ }
+  </script>
   {% if request.cookies.get('asm_ls_session') %}
-  <nav>
-    <strong><a href="/admin">YgLicenseServer</a></strong>
-    {% if app_version %}<span class="muted" style="font-size:.85em;font-family:Menlo,Consolas,monospace;">v{{ app_version }}</span>{% endif %}
-    <a href="/admin">Dashboard</a>
-    <a href="/admin/products">Products</a>
-    <a href="/admin/customers">Customers</a>
-    <a href="/admin/events">Events</a>
-    <a href="/admin/webhook-deliveries">Webhook Deliveries</a>
-    <form class="right" action="/admin/logout" method="post" style="margin:0;">
-      {{ csrf_input(request) }}
-      <button class="btn muted" type="submit">Log Out</button>
-    </form>
-  </nav>
+  <!-- Mobile topbar (visible <=768px). Hamburger summons the sidebar overlay. -->
+  <div class="mobile-topbar">
+    <button type="button" id="mobile-toggle" aria-label="Open menu">
+      <svg width="22" height="22" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5"/>
+      </svg>
+    </button>
+    <a href="/admin" class="brand" style="color:var(--fg);font-weight:600;">YgLicenseServer</a>
+  </div>
+  <div class="mobile-overlay" id="mobile-overlay"></div>
+  <aside class="sidebar" aria-label="Primary navigation">
+    <div class="sidebar-header">
+      <a href="/admin" class="brand">
+        <!-- Brand mark: small key icon for the icon-only collapsed state. -->
+        <svg width="22" height="22" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" style="vertical-align:-5px;">
+          <path d="M0 8a4 4 0 0 1 7.465-2H14a.5.5 0 0 1 .354.146l1.5 1.5a.5.5 0 0 1 0 .708l-1.5 1.5a.5.5 0 0 1-.708 0L13 9.207l-.646.647a.5.5 0 0 1-.708 0L11 9.207l-.646.647a.5.5 0 0 1-.708 0L9 9.207l-.646.647A.5.5 0 0 1 8 10h-.535A4 4 0 0 1 0 8m4-3a3 3 0 1 0 2.712 4.285A.5.5 0 0 1 7.163 9h.63l.853-.854a.5.5 0 0 1 .708 0l.646.647.646-.647a.5.5 0 0 1 .708 0l.646.647.646-.647a.5.5 0 0 1 .708 0l.646.647.793-.793-1-1h-6.63a.5.5 0 0 1-.451-.285A3 3 0 0 0 4 5"/>
+          <path d="M4 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0"/>
+        </svg>
+        <span class="brand-text">YgLicenseServer</span>
+      </a>
+      {% if app_version %}<span class="sidebar-version brand-text">v{{ app_version }}</span>{% endif %}
+      <button type="button" class="sidebar-toggle" id="sidebar-toggle"
+              aria-label="Collapse sidebar" title="Collapse sidebar (Ctrl+B)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" id="sidebar-toggle-icon">
+          <path d="M8.354 1.646a.5.5 0 0 1 0 .708L2.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0"/>
+          <path d="M12.354 1.646a.5.5 0 0 1 0 .708L6.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0"/>
+        </svg>
+      </button>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="/admin" data-nav-key="dashboard" title="Dashboard">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M6.5 14.5v-3.505c0-.245.25-.495.5-.495h2c.25 0 .5.25.5.5v3.5a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5v-7a.5.5 0 0 0-.146-.354L13 5.793V2.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v1.293L8.354 1.146a.5.5 0 0 0-.708 0l-6 6A.5.5 0 0 0 1.5 7.5v7a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5"/>
+        </svg>
+        <span class="nav-label">Dashboard</span>
+      </a>
+      <a href="/admin/products" data-nav-key="products" title="Products">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8.186 1.113a.5.5 0 0 0-.372 0L1.846 3.5 8 5.961 14.154 3.5zM15 4.239l-6.5 2.6v7.922l6.5-2.6V4.24zM7.5 14.762V6.838L1 4.239v7.923z"/>
+        </svg>
+        <span class="nav-label">Products</span>
+      </a>
+      <a href="/admin/customers" data-nav-key="customers" title="Customers">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M7 14s-1 0-1-1 1-4 5-4 5 3 5 4-1 1-1 1zm4-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-5.784 6A2.24 2.24 0 0 1 5 13c0-1.355.68-2.75 1.936-3.72A6.3 6.3 0 0 0 5 9c-4 0-5 3-5 4s1 1 1 1zM4.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5"/>
+        </svg>
+        <span class="nav-label">Customers</span>
+      </a>
+      <a href="/admin/events" data-nav-key="events" title="Events">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 3.5a.5.5 0 0 0-1 0V9a.5.5 0 0 0 .252.434l3.5 2a.5.5 0 0 0 .496-.868L8 8.71z"/>
+          <path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16m7-8A7 7 0 1 1 1 8a7 7 0 0 1 14 0"/>
+        </svg>
+        <span class="nav-label">Events</span>
+      </a>
+      <a href="/admin/webhook-deliveries" data-nav-key="webhook-deliveries" title="Webhook Deliveries">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M5.52 19.255c-2.61-.633-3.27-3.94-1.397-5.422l.097-.071L2.018 9.297c-2.05.642-3.66-1.667-2.475-3.503C.731 4.082 3.187 4.026 4 5.917c.327.762.265 1.594-.075 2.282l2.193 4.45c1.302-.498 2.79-.018 3.55 1.158l3.728-2.671c-.46-2.045 1.798-3.74 3.59-2.526 1.61 1.092 1.357 3.55-.444 4.288-.86.354-1.745.247-2.487-.219l-3.752 2.69c.317 1.42-.475 2.86-1.864 3.404-1.143.448-2.404.21-3.275-.563l-.067-.064c-.193-.187-.36-.4-.495-.633M2.5 13.5c-.55 0-1 .45-1 1 0 .55.45 1 1 1s1-.45 1-1c0-.55-.45-1-1-1m11.5-3c0-.55-.45-1-1-1-.553 0-1.001.448-1 1 0 .55.45 1 1 1s1-.45 1-1M2.5 5C1.95 5 1.5 5.45 1.5 6c0 .55.45 1 1 1s1-.45 1-1c0-.55-.45-1-1-1m4 12c0-.55-.45-1-1-1-.553 0-1.001.448-1 1 0 .55.45 1 1 1s1-.45 1-1"/>
+        </svg>
+        <span class="nav-label">Webhook Deliveries</span>
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <form action="/admin/logout" method="post">
+        {{ csrf_input(request) }}
+        <button class="btn muted" type="submit" title="Log Out">
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M10 12.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5h8a.5.5 0 0 1 .5.5v2a.5.5 0 0 0 1 0v-2A1.5 1.5 0 0 0 9.5 2h-8A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h8a1.5 1.5 0 0 0 1.5-1.5v-2a.5.5 0 0 0-1 0z"/>
+            <path d="M15.854 8.354a.5.5 0 0 0 0-.708l-3-3a.5.5 0 0 0-.708.708L14.293 7.5H5.5a.5.5 0 0 0 0 1h8.793l-2.147 2.146a.5.5 0 0 0 .708.708z"/>
+          </svg>
+          <span class="logout-label">Log Out</span>
+        </button>
+      </form>
+    </div>
+  </aside>
   {% endif %}
   <main>
     {% block content %}{% endblock %}
