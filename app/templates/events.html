@@ -12,7 +12,16 @@
 </div>
 <div class="card">
   {% if events %}
-  <table data-sortable>
+  <div style="margin-bottom: .75rem; display:flex; align-items:center; gap:.5rem;">
+    <input
+      type="search" placeholder="Filter by type, license id, note…"
+      data-filter-target="#events-table"
+      data-filter-counter="#events-filter-count"
+      style="flex: 0 0 22rem; padding: .35rem .5rem;"
+      aria-label="Filter events" />
+    <span class="muted" id="events-filter-count"></span>
+  </div>
+  <table id="events-table" data-sortable>
     <thead><tr>
       <th data-sort-key="when" data-sort-type="date">When</th>
       <th data-sort-key="type">Type</th>

@@ -71,7 +71,19 @@
       </button>
       <span class="muted" style="margin-left:.5em;">tick rows then click. installs are removed; events are kept with license_id nulled.</span>
     </p>
-    <table data-sortable>
+    <div style="margin: .25em 0 .5em; display:flex; align-items:center; gap:.5rem;">
+      <input
+        type="search" placeholder="Filter by key, customer, status, plan…"
+        data-filter-target="#licenses-table"
+        data-filter-counter="#licenses-filter-count"
+        style="flex: 0 0 22rem; padding: .35rem .5rem;"
+        aria-label="Filter licenses" />
+      <span class="muted" id="licenses-filter-count"></span>
+      <span style="flex:1"></span>
+      <a class="muted" href="/v1/admin/exports/products/{{ product.slug }}/licenses.csv"
+         title="Download all licenses for this product as CSV (requires admin token)">CSV</a>
+    </div>
+    <table id="licenses-table" data-sortable>
       <thead><tr>
         <th style="width:1%;"><input type="checkbox" data-select-all title="Select All"></th>
         <th data-sort-key="key">Key</th>

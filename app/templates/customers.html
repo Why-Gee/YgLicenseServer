@@ -13,7 +13,19 @@
 
 <div class="card">
   {% if customers %}
-  <table data-sortable>
+  <div style="margin-bottom: .75rem; display:flex; align-items:center; gap:.5rem;">
+    <input
+      type="search" placeholder="Filter by name, email, Stripe ID…"
+      data-filter-target="#customers-table"
+      data-filter-counter="#customers-filter-count"
+      style="flex: 0 0 22rem; padding: .35rem .5rem;"
+      aria-label="Filter customers" />
+    <span class="muted" id="customers-filter-count"></span>
+    <span style="flex:1"></span>
+    <a class="muted" href="/v1/admin/exports/customers.csv"
+       title="Download all customers as CSV (requires admin token)">CSV</a>
+  </div>
+  <table id="customers-table" data-sortable>
     <thead><tr>
       <th data-sort-key="name">Name</th>
       <th data-sort-key="email">Email</th>
