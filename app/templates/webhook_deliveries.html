@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Webhook Deliveries{% endblock %}
+{% block content %}
+<h1>Webhook Deliveries</h1>
+
+{% if request.query_params.get('retried') %}
+<div class="success">retry triggered. refresh in a moment to see the result.</div>
+{% endif %}
+{% if request.query_params.get('error') == 'not_found' %}
+<div class="error">delivery not found.</div>
+{% endif %}
+
+<div class="card">
+  <div style="display:flex; gap:1rem; align-items:center; margin-bottom:.75rem; flex-wrap:wrap;">
+    <strong>Status:</strong>
+    <a href="/admin/webhook-deliveries"
+       class="btn {% if not active_status %}{% else %}muted{% endif %}">
+      All ({{ counts.pending + counts.delivered + counts.abandoned }})
+    </a>
+    <a href="/admin/webhook-deliveries?status=pending"
+       class="btn {% if active_status == 'pending' %}{% else %}muted{% endif %}">
+      Pending ({{ counts.pending }})
+    </a>
+    <a href="/admin/webhook-deliveries?status=delivered"
+       class="btn {% if active_status == 'delivered' %}{% else %}muted{% endif %}">
+      Delivered ({{ counts.delivered }})
+    </a>
+    <a href="/admin/webhook-deliveries?status=abandoned"
+       class="btn {% if active_status == 'abandoned' %}{% else %}muted{% endif %}">
+      Abandoned ({{ counts.abandoned }})
+    </a>
+    <span style="flex:1"></span>
+    <input
+      type="search" placeholder="Filter by url, event type, error…"
+      data-filter-target="#deliveries-table"
+      data-filter-counter="#deliveries-filter-count"
+      style="flex: 0 0 22rem; padding: .35rem .5rem;"
+      aria-label="Filter deliveries" />
+    <span class="muted" id="deliveries-filter-count"></span>
+  </div>
+
+  {% if deliveries %}
+  <table id="deliveries-table" data-sortable>
+    <thead><tr>
+      <th data-sort-key="created" data-sort-type="date">Created</th>
+      <th data-sort-key="event">Event</th>
+      <th data-sort-key="status">Status</th>
+      <th data-sort-key="attempts" data-sort-type="number">Attempts</th>
+      <th data-sort-key="next" data-sort-type="date">Next attempt</th>
+      <th data-sort-key="url">URL</th>
+      <th>Last error</th>
+      <th style="width:1%;"></th>
+    </tr></thead>
+    <tbody>
+    {% for d in deliveries %}
+      <tr>
+        <td class="muted">{{ d.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td><code style="font-size:.85em;">{{ d.event_type }}</code></td>
+        <td>
+          {% if d.status == 'pending' %}
+            <span style="color:#d97706;">pending</span>
+          {% elif d.status == 'delivered' %}
+            <span style="color:#059669;">delivered</span>
+          {% else %}
+            <span style="color:#dc2626;">abandoned</span>
+          {% endif %}
+        </td>
+        <td>{{ d.attempts }}</td>
+        <td data-sort-value="{{ d.next_attempt_at.isoformat() if d.next_attempt_at else '' }}" class="muted">
+          {% if d.status == 'pending' %}
+            {{ d.next_attempt_at.strftime('%Y-%m-%d %H:%M:%S') }}
+            {% if d.next_attempt_at <= now %}<span style="color:#d97706;">(due)</span>{% endif %}
+          {% elif d.status == 'delivered' %}
+            {{ d.delivered_at.strftime('%Y-%m-%d %H:%M:%S') if d.delivered_at else '—' }}
+          {% else %}
+            —
+          {% endif %}
+        </td>
+        <td class="muted" style="max-width:18rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{{ d.url }}">
+          <code style="font-size:.8em;">{{ d.url }}</code>
+        </td>
+        <td class="muted" style="max-width:18rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{{ d.last_error or '' }}">
+          {{ d.last_error or '' }}
+        </td>
+        <td>
+          {% if d.status != 'delivered' %}
+          <form method="post" action="/admin/webhook-deliveries/{{ d.id }}/retry" style="margin:0;">
+            {{ csrf_input(request) }}
+            <button type="submit" class="btn"
+                    title="Force an immediate redelivery attempt"
+                    style="padding:.2em .6em; font-size:.85em;">
+              Retry now
+            </button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted" style="margin-top:.5em;">
+    showing {{ deliveries | length }} most recent
+    {% if active_status %}{{ active_status }} {% endif %}deliver{% if deliveries | length == 1 %}y{% else %}ies{% endif %}.
+  </p>
+  {% else %}
+  <p class="muted">no deliveries {% if active_status %}with status <code>{{ active_status }}</code>{% endif %} yet.</p>
+  {% endif %}
+</div>
+{% endblock %}
