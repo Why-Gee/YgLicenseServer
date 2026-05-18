@@ -209,6 +209,53 @@ def _event_autofill_subject(_mapper, _conn, target: Event) -> None:
             target.subject_id = str(pid)
 
 
+class WebhookDelivery(Base):
+    """Retry queue for outbound license webhooks.
+
+    Inserted inside the same DB transaction as the state change that
+    triggered the webhook (status change, edit, delete). status='pending'
+    until either the post-commit attempt succeeds (-> 'delivered') or the
+    backoff schedule is exhausted (-> 'abandoned').
+
+    The retry worker (`python -m app.scripts.retry_webhooks`) queries
+    (status='pending' AND next_attempt_at <= now) and walks each row
+    through one HTTP attempt + backoff bump.
+
+    Backoff schedule lives in app.webhooks; this table just stores the
+    `next_attempt_at` timestamp the runner reads.
+    """
+
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','delivered','abandoned')",
+            name="ck_webhook_deliveries_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    license_id: Mapped[str | None] = mapped_column(
+        ForeignKey("licenses.id"), nullable=True, index=True,
+    )
+    product_id: Mapped[str | None] = mapped_column(
+        ForeignKey("products.id"), nullable=True, index=True,
+    )
+    url: Mapped[str] = mapped_column(String(512))
+    secret: Mapped[str] = mapped_column(String(128))
+    event_type: Mapped[str] = mapped_column(String(64))
+    # Full JSON payload as serialized by the call site (post-commit). Stored
+    # rather than recomputed so a retry uses the EXACT bytes signed at
+    # enqueue time -- license fields may have changed since.
+    payload_json: Mapped[str] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive, index=True)
+
+
 class ProcessedStripeEvent(Base):
     """Idempotency table for Stripe webhook delivery. Stripe occasionally
     redelivers the same event.id (network blip, manual retry); without this
