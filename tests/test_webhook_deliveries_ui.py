@@ -63,6 +63,41 @@ def test_requires_login(client) -> None:
     assert "/admin/login" in r.headers["location"]
 
 
+def test_shows_configured_receivers_with_no_deliveries(client) -> None:
+    """A license with webhook_url set but no firings yet should still show
+    up under "Configured receivers" -- otherwise the page looks empty and
+    the admin assumes the webhook isn't wired."""
+    _login(client)
+    # Create license with webhook URL, but DO NOT trigger any status change.
+    r = client.post(
+        "/v1/admin/products",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"slug": "asm", "name": "ASM", "key_prefix": "asm"},
+    )
+    assert r.status_code == 200
+    r = client.post(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"email": "x@example.com", "plan": "standard", "valid_days": 30},
+    )
+    license_id = r.json()["license_id"]
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=license_id).one()
+        lic.webhook_url = "https://hook.example.test/abc"
+        lic.webhook_secret = "whsec_test"
+        s.commit()
+    r = client.get("/admin/webhook-deliveries")
+    assert r.status_code == 200
+    body = r.text
+    # Configured-receivers panel shows the URL.
+    assert "Configured receivers (1)" in body
+    assert "hook.example.test/abc" in body
+    # Empty-state copy points at how to make a delivery happen.
+    assert "Test webhook" in body or "status change" in body
+
+
 def test_lists_pending_delivery(client) -> None:
     _login(client)
     delivery_id = _create_pending_delivery(client)
@@ -89,7 +124,8 @@ def test_status_filter_delivered_empty(client) -> None:
     r = client.get("/admin/webhook-deliveries?status=delivered")
     assert r.status_code == 200
     assert "Delivered (0)" in r.text
-    assert "no deliveries" in r.text.lower()
+    # Empty-state copy mentions the active filter status.
+    assert "no <code>delivered</code> deliveries" in r.text
 
 
 def test_retry_requires_csrf(client) -> None:

@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app._time import utcnow
 from app.db import get_db
-from app.models import WebhookDelivery
+from app.models import License, WebhookDelivery
 from app.routers.admin_ui._deps import require_csrf, require_login, templates
 from app.webhooks import attempt_in_fresh_session
 
@@ -43,12 +43,22 @@ def list_deliveries(
         s: db.query(WebhookDelivery).filter_by(status=s).count()
         for s in _ALLOWED_STATUS
     }
+    # Licenses that have a webhook URL configured. Shown so the page
+    # makes sense even when no deliveries have fired yet -- "here are
+    # the receivers we'd ping if anything happens."
+    configured = (
+        db.query(License)
+        .filter(License.webhook_url.isnot(None))
+        .order_by(License.created_at.desc())
+        .all()
+    )
     return templates.TemplateResponse(
         request, "webhook_deliveries.html",
         {
             "deliveries": rows,
             "counts": counts,
             "active_status": status_filter,
+            "configured_licenses": configured,
             "now": utcnow(),
         },
     )
