@@ -1,0 +1,13 @@
+[Unit]
+Description=Weekly YgLicenseServer events-table prune
+Requires=yg-license-prune-events.service
+
+[Timer]
+# Sunday 04:11 UTC. Offset from the nightly backup (03:17) so they don't
+# fight for the same SQLite writer if backup ever runs long.
+OnCalendar=Sun *-*-* 04:11:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
