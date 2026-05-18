@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily YgLicenseServer license-expiry warning pass
+Requires=yg-license-expiry-warnings.service
+
+[Timer]
+# 09:23 UTC daily -- mid-morning Europe / early-morning US so the customer
+# sees the warning during business hours. Offset from the other timers.
+OnCalendar=*-*-* 09:23:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

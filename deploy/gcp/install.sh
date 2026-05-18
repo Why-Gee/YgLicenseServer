@@ -213,6 +213,10 @@ echo "==> install webhook-retry systemd units"
 install -m 0644 "$SCRIPT_DIR/yg-license-retry-webhooks.service" /etc/systemd/system/yg-license-retry-webhooks.service
 install -m 0644 "$SCRIPT_DIR/yg-license-retry-webhooks.timer"   /etc/systemd/system/yg-license-retry-webhooks.timer
 
+echo "==> install expiry-warning systemd units"
+install -m 0644 "$SCRIPT_DIR/yg-license-expiry-warnings.service" /etc/systemd/system/yg-license-expiry-warnings.service
+install -m 0644 "$SCRIPT_DIR/yg-license-expiry-warnings.timer"   /etc/systemd/system/yg-license-expiry-warnings.timer
+
 # Surface the bucket name in the env file so backup.sh + future ops scripts
 # read the same value.
 ensure_env_line "BACKUP_BUCKET" "$BACKUP_BUCKET"
@@ -225,6 +229,7 @@ systemctl enable --now yg-license-server.service
 systemctl enable --now yg-license-backup.timer
 systemctl enable --now yg-license-prune-events.timer
 systemctl enable --now yg-license-retry-webhooks.timer
+systemctl enable --now yg-license-expiry-warnings.timer
 
 echo
 echo "==> wait for service health"

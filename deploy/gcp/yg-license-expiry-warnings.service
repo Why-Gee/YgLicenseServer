@@ -1,0 +1,12 @@
+[Unit]
+Description=YgLicenseServer license-expiry warning email pass
+After=network-online.target yg-license-server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker run --rm \
+  --env-file /etc/yg-license-server/yg-license-server.env \
+  -v /var/lib/yg-license-server:/data \
+  ghcr.io/why-gee/yg-license-server:latest \
+  python -m app.scripts.send_expiry_warnings
