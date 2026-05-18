@@ -223,3 +223,40 @@ document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
     update();
   });
 })();
+
+// Client-side row filter for tables with lots of rows. Opt in by adding
+// `data-filter-target="#sel"` to an <input>; the selector points at the
+// table to filter (or a wrapper containing one). Filters by case-insensitive
+// substring against the row's full textContent. Empty input = show all.
+//
+// Used on customers, licenses (per product), events. Works alongside the
+// existing data-sortable behavior on the same table.
+(function () {
+  function applyFilter(input) {
+    var sel = input.getAttribute('data-filter-target');
+    if (!sel) return;
+    var target = document.querySelector(sel);
+    if (!target) return;
+    var table = target.tagName === 'TABLE' ? target : target.querySelector('table');
+    if (!table || !table.tBodies[0]) return;
+    var q = (input.value || '').trim().toLowerCase();
+    var rows = table.tBodies[0].rows;
+    var shown = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!q || r.textContent.toLowerCase().indexOf(q) !== -1) {
+        r.style.display = '';
+        shown++;
+      } else {
+        r.style.display = 'none';
+      }
+    }
+    var counter = document.querySelector(input.getAttribute('data-filter-counter') || '');
+    if (counter) counter.textContent = q ? (shown + ' shown') : '';
+  }
+  document.querySelectorAll('input[data-filter-target]').forEach(function (input) {
+    input.addEventListener('input', function () { applyFilter(input); });
+    // Pre-apply in case the input has a value from the URL (deep-link).
+    if (input.value) applyFilter(input);
+  });
+})();

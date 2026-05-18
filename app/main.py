@@ -20,6 +20,7 @@ from app.request_id import RequestIdLogFilter, RequestIdMiddleware
 from app.routers.admin_ui import ALL_ROUTERS as ADMIN_UI_ROUTERS
 from app.routers.admin_ui import LoginRequired
 from app.routers.api import router as api_router
+from app.routers.exports import router as exports_router
 from app.services.errors import ServiceError
 from app.stripe_webhook import router as stripe_router
 
@@ -116,6 +117,7 @@ app.mount(
     name="static",
 )
 app.include_router(api_router)
+app.include_router(exports_router)
 app.include_router(stripe_router)
 for _r in ADMIN_UI_ROUTERS:
     app.include_router(_r)

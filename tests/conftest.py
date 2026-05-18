@@ -67,6 +67,8 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
     # Routers.
     import app.routers.api as api_mod
     importlib.reload(api_mod)
+    import app.routers.exports as exports_mod
+    importlib.reload(exports_mod)
     import app.stripe_webhook as sw
     importlib.reload(sw)
     import app.routers.admin_ui._deps as ui_deps
