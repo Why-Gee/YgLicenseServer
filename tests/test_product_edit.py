@@ -1,12 +1,12 @@
 """Product edit tests (v0.18.0)."""
 from __future__ import annotations
 
+import pytest
+from fastapi.testclient import TestClient
+
 import app.db as db_mod
 from app.models import Event, Product
 from app.services import products as products_svc
-from fastapi.testclient import TestClient
-import pytest
-
 
 # ------------------------- service-level tests ----------------------------
 
