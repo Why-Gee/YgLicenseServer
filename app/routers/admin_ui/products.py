@@ -90,13 +90,11 @@ def product_edit(
             name=name or None,
             key_prefix=key_prefix or None,
             jwt_issuer=jwt_issuer or None,
-            description=description if description != "" else None,
+            description=description or None,
         )
     except NotFound as e:
         raise HTTPException(status_code=404) from e
-    except Conflict as e:
-        return RedirectResponse(f"/admin/products?error={err_code(e)}", status_code=303)
-    except ValidationFailed as e:
+    except (Conflict, ValidationFailed) as e:
         return RedirectResponse(f"/admin/products?error={err_code(e)}", status_code=303)
     return RedirectResponse(
         f"/admin/products?product_edited={p.slug}", status_code=303,

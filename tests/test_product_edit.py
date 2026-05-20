@@ -158,7 +158,7 @@ def test_update_product_noop_writes_no_event(client: TestClient) -> None:
 
 def _login(client: TestClient) -> dict[str, str]:
     r = client.post("/admin/login", data={"token": "test-admin"}, follow_redirects=False)
-    assert r.status_code == 303
+    assert r.status_code == 303, r.text
     return {"ls_session": r.cookies["ls_session"]}
 
 
@@ -260,3 +260,20 @@ def test_edit_route_slug_collision_redirects_with_error(client: TestClient) -> N
     )
     assert r.status_code == 303
     assert r.headers["location"] == "/admin/products?error=slug+exists"
+
+
+def test_edit_route_invalid_slug_redirects_with_error(client: TestClient) -> None:
+    _admin_create(client)
+    cookies = _login(client)
+    r = client.post(
+        "/admin/products/myapp/edit",
+        data={
+            "slug": "Bad Slug!", "name": "X",
+            "key_prefix": "myapp", "jwt_issuer": "",
+            "description": "",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/admin/products?error=")

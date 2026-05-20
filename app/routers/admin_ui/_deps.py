@@ -44,23 +44,27 @@ class LoginRequired(Exception):
 # render `{{ error_message(request.query_params.get('error')) }}` so a
 # crafted ?error=<script> can't even show as raw text.
 ERROR_MESSAGES = {
-    "slug exists": "A product with that slug already exists.",
+    "email already used by another customer": "That email is already used by another customer.",
+    "email required": "Email is required.",
     "invalid features json": "Features JSON was not a valid object.",
+    "invalid key_prefix": "Key prefix must be lowercase a–z 0–9 _, max 15 characters.",
+    "invalid slug": "Slug must be lowercase a–z 0–9 –, max 63 characters.",
     "invalid valid_until": "Could not parse Valid Until date.",
-    "no products selected": "No products were selected.",
     "no licenses selected": "No licenses were selected.",
+    "no products selected": "No products were selected.",
     "no webhook configured": "This license has no webhook URL configured.",
+    "slug exists": "A product with that slug already exists.",
     "unsafe webhook url": (
         "Webhook URL refused by SSRF guard "
         "(private/loopback/internal host or non-http(s) scheme)."
     ),
-    "email required": "Email is required.",
-    "email already used by another customer": "That email is already used by another customer.",
 }
 
 # Service-exception messages -> stable UI error codes (used in ?error=<code>).
 SERVICE_ERR_TO_CODE: dict[str, str] = {
     "slug already exists": "slug+exists",
+    "invalid slug (lowercase a-z0-9-, max 63)": "invalid+slug",
+    "invalid key_prefix (lowercase a-z0-9_, max 15)": "invalid+key_prefix",
     "invalid features json": "invalid+features+json",
     "invalid valid_until": "invalid+valid_until",
     "unsafe webhook url": "unsafe+webhook+url",
