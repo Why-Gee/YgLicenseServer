@@ -1,4 +1,4 @@
-"""Product CRUD: list, new form, create, single + bulk delete, detail,
+"""Product CRUD: list, create, edit, single + bulk delete, detail,
 public-key download."""
 from __future__ import annotations
 
