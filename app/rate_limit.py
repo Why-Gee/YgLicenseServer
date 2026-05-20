@@ -17,8 +17,8 @@ happen in prod but might in dev, fall back to the socket peer.
 
 Don't apply these limiters to the JSON admin API (/v1/admin/*): it's already
 behind a 32-byte bearer token with constant-time compare, and rate-limiting
-there is friction without security gain (ASM legitimately bursts when an
-operator backfills via a script).
+there is friction without security gain (a client app legitimately bursts
+when an operator backfills via a script).
 """
 from __future__ import annotations
 

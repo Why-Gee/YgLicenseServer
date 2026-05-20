@@ -8,13 +8,13 @@ from fastapi.testclient import TestClient
 def _login(client: TestClient) -> dict[str, str]:
     r = client.post("/admin/login", data={"token": "test-admin"}, follow_redirects=False)
     assert r.status_code == 303, r.text
-    return {"asm_ls_session": r.cookies["asm_ls_session"]}
+    return {"ls_session": r.cookies["ls_session"]}
 
 
 def _csrf(cookies: dict[str, str]) -> str:
     from app.config import get_settings
     from app.security import csrf_token
-    return csrf_token(get_settings().session_secret, cookies["asm_ls_session"])
+    return csrf_token(get_settings().session_secret, cookies["ls_session"])
 
 
 def _create_product(client: TestClient, slug: str = "asm") -> None:

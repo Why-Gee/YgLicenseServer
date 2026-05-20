@@ -131,7 +131,7 @@ def test_admin_ui_login_success(client: TestClient) -> None:
         follow_redirects=False,
     )
     assert r.status_code == 303
-    assert "asm_ls_session" in r.headers.get("set-cookie", "")
+    assert "ls_session" in r.headers.get("set-cookie", "")
 
 
 # ---------- per-tenant self-registration via /v1/check -------------------

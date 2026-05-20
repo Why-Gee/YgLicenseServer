@@ -148,9 +148,9 @@ def license_webhook_update(
 
 # ----- programmatic admin API (Bearer ADMIN_TOKEN) -----------------------
 # Bearer-token sister of the form-driven /admin/licenses/{lid}/webhook
-# above. Lets external scripts (e.g. ASM's start.ps1 spinning up a fresh
-# cloudflared quick tunnel on each boot) wire the receiver URL + read back
-# the signing secret without driving the admin UI.
+# above. Lets external scripts (e.g. a client-side startup script spinning
+# up a fresh tunnel on each boot) wire the receiver URL + read back the
+# signing secret without driving the admin UI.
 
 class _WebhookConfigIn(BaseModel):
     url: str  # required; empty string clears (delete url + secret)

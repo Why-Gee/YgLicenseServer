@@ -26,8 +26,10 @@ TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["app_version"] = __version__
 
-SESSION_COOKIE = "asm_ls_session"
+SESSION_COOKIE = "ls_session"
 SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
+
+templates.env.globals["session_cookie_name"] = SESSION_COOKIE
 
 
 class LoginRequired(Exception):

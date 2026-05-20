@@ -22,10 +22,10 @@ def _bootstrap_license(client: TestClient, *, webhook_url: str = "") -> str:
     r = client.post(
         "/admin/login", data={"token": "test-admin"}, follow_redirects=False
     )
-    cookies = {"asm_ls_session": r.cookies["asm_ls_session"]}
+    cookies = {"ls_session": r.cookies["ls_session"]}
     from app.config import get_settings
     from app.security import csrf_token
-    csrf = csrf_token(get_settings().session_secret, cookies["asm_ls_session"])
+    csrf = csrf_token(get_settings().session_secret, cookies["ls_session"])
     form = {
         "email": "buyer@example.com",
         "plan": "standard",

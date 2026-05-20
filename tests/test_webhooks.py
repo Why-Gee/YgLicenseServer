@@ -45,7 +45,7 @@ def _admin_login(client: TestClient) -> dict[str, str]:
     use the cookie; JSON API routes use the bearer token."""
     r = client.post("/admin/login", data={"token": "test-admin"}, follow_redirects=False)
     assert r.status_code == 303, r.text
-    return {"asm_ls_session": r.cookies["asm_ls_session"]}
+    return {"ls_session": r.cookies["ls_session"]}
 
 
 def _csrf_for(cookies: dict[str, str]) -> str:
@@ -54,7 +54,7 @@ def _csrf_for(cookies: dict[str, str]) -> str:
     they need to compute the same HMAC."""
     from app.config import get_settings
     from app.security import csrf_token
-    return csrf_token(get_settings().session_secret, cookies["asm_ls_session"])
+    return csrf_token(get_settings().session_secret, cookies["ls_session"])
 
 
 def _form_post(client: TestClient, url: str, cookies: dict[str, str], data: dict | None = None, **kw):

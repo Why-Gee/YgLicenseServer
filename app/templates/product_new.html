@@ -7,18 +7,18 @@
 <form method="post" action="/admin/products" class="card" style="max-width:600px;">
   {{ csrf_input(request) }}
   <label for="slug">Slug</label>
-  <input id="slug" name="slug" required pattern="[a-z0-9][a-z0-9-]{0,62}" placeholder="asm">
+  <input id="slug" name="slug" required pattern="[a-z0-9][a-z0-9-]{0,62}" placeholder="myapp">
   <small class="muted">lowercase, a–z 0–9 –, max 63. URL-safe.</small>
 
   <label for="name">Display Name</label>
-  <input id="name" name="name" required placeholder="Animal Shelter Manager">
+  <input id="name" name="name" required placeholder="My Application">
 
   <label for="key_prefix">License-Key Prefix</label>
-  <input id="key_prefix" name="key_prefix" required pattern="[a-z0-9_]{1,15}" placeholder="asm">
-  <small class="muted">keys for this product look like <code>asm_aB7…</code>. lowercase a–z 0–9 _, max 15.</small>
+  <input id="key_prefix" name="key_prefix" required pattern="[a-z0-9_]{1,15}" placeholder="myapp">
+  <small class="muted">keys for this product look like <code>myapp_aB7…</code>. lowercase a–z 0–9 _, max 15.</small>
 
   <label for="jwt_issuer">JWT Issuer (Optional)</label>
-  <input id="jwt_issuer" name="jwt_issuer" placeholder="asm-license-server">
+  <input id="jwt_issuer" name="jwt_issuer" placeholder="myapp-license-server">
   <small class="muted">defaults to <code>&lt;slug&gt;-license-server</code>.</small>
 
   <label for="description">Description (Optional)</label>
