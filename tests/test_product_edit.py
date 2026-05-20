@@ -277,3 +277,27 @@ def test_edit_route_invalid_slug_redirects_with_error(client: TestClient) -> Non
     )
     assert r.status_code == 303
     assert r.headers["location"].startswith("/admin/products?error=")
+
+
+def test_new_product_route_is_gone(client: TestClient) -> None:
+    """The standalone /admin/products/new page is replaced by the modal."""
+    cookies = _login(client)
+    r = client.get("/admin/products/new", cookies=cookies)
+    assert r.status_code == 404
+
+
+def test_create_collision_redirects_to_products_list(client: TestClient) -> None:
+    """Create-error redirect target moved from /admin/products/new to /admin/products."""
+    _admin_create(client, slug="dup")
+    cookies = _login(client)
+    r = client.post(
+        "/admin/products",
+        data={
+            "slug": "dup", "name": "Dup",
+            "key_prefix": "dup",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/admin/products?error=slug+exists"

@@ -31,12 +31,6 @@ def products_list(request: Request, db: Session = Depends(get_db)) -> Response:
     )
 
 
-@router.get("/admin/products/new", response_class=HTMLResponse)
-def product_new_form(request: Request) -> Response:
-    require_login(request)
-    return templates.TemplateResponse(request, "product_new.html")
-
-
 @router.post("/admin/products")
 def product_create(
     request: Request,
@@ -55,10 +49,11 @@ def product_create(
             db, slug=slug, name=name, key_prefix=key_prefix,
             description=description or None,
             jwt_issuer=jwt_issuer or None,
+            validate_format=True,
         )
-    except Conflict as e:
+    except (Conflict, ValidationFailed) as e:
         return RedirectResponse(
-            f"/admin/products/new?error={err_code(e)}", status_code=303
+            f"/admin/products?error={err_code(e)}", status_code=303,
         )
     return RedirectResponse(f"/admin/products/{slug}", status_code=303)
 

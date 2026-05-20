@@ -81,8 +81,8 @@ def test_products_tab_lists_products(client: TestClient) -> None:
     assert r.status_code == 200
     assert b'<code>asm</code>' in r.content
     assert b'<code>other</code>' in r.content
-    # New-product button still on this page.
-    assert b'href="/admin/products/new"' in r.content
+    # New-product button is now a modal trigger (was href="/admin/products/new").
+    assert b'data-product-modal="create"' in r.content
 
 
 def test_products_tab_link_in_nav(client: TestClient) -> None:
