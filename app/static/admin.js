@@ -271,7 +271,7 @@ document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
 
   // ---- active link --------------------------------------------------------
   // Match the most-specific data-nav-key against the current path. We anchor
-  // on path prefix so /admin/products/asm still highlights "Products".
+  // on path prefix so /admin/products/<slug> still highlights "Products".
   var path = window.location.pathname.replace(/\/+$/, '') || '/admin';
   var routes = {
     'dashboard':           function (p) { return p === '/admin'; },

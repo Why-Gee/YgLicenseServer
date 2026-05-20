@@ -1,4 +1,4 @@
-"""Product CRUD: list, new form, create, single + bulk delete, detail,
+"""Product CRUD: list, create, edit, single + bulk delete, detail,
 public-key download."""
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from app.db import get_db
 from app.models import License
 from app.routers.admin_ui._deps import err_code, require_csrf, require_login, templates
 from app.services import products as products_svc
-from app.services.errors import Conflict, NotFound
+from app.services.errors import Conflict, NotFound, ValidationFailed
 
 router = APIRouter()
 
@@ -31,12 +31,6 @@ def products_list(request: Request, db: Session = Depends(get_db)) -> Response:
     )
 
 
-@router.get("/admin/products/new", response_class=HTMLResponse)
-def product_new_form(request: Request) -> Response:
-    require_login(request)
-    return templates.TemplateResponse(request, "product_new.html")
-
-
 @router.post("/admin/products")
 def product_create(
     request: Request,
@@ -55,12 +49,51 @@ def product_create(
             db, slug=slug, name=name, key_prefix=key_prefix,
             description=description or None,
             jwt_issuer=jwt_issuer or None,
+            validate_format=True,
         )
-    except Conflict as e:
+    except (Conflict, ValidationFailed) as e:
         return RedirectResponse(
-            f"/admin/products/new?error={err_code(e)}", status_code=303
+            f"/admin/products?error={err_code(e)}", status_code=303,
         )
     return RedirectResponse(f"/admin/products/{slug}", status_code=303)
+
+
+@router.post("/admin/products/{slug}/edit")
+def product_edit(
+    slug: str,
+    request: Request,
+    new_slug: str = Form("", alias="slug"),
+    name: str = Form(""),
+    key_prefix: str = Form(""),
+    jwt_issuer: str = Form(""),
+    description: str = Form(""),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Edit an existing product via the unified create/edit modal.
+
+    The form's `slug` field is the desired new slug; the path slug is the
+    current slug we're editing. None-values are normalized so blank optional
+    fields don't overwrite stored values with empty strings.
+    """
+    require_login(request)
+    require_csrf(request, csrf_token)
+    try:
+        p = products_svc.update_product(
+            db, slug,
+            new_slug=new_slug or None,
+            name=name or None,
+            key_prefix=key_prefix or None,
+            jwt_issuer=jwt_issuer or None,
+            description=description or None,
+        )
+    except NotFound as e:
+        raise HTTPException(status_code=404) from e
+    except (Conflict, ValidationFailed) as e:
+        return RedirectResponse(f"/admin/products?error={err_code(e)}", status_code=303)
+    return RedirectResponse(
+        f"/admin/products?product_edited={p.slug}", status_code=303,
+    )
 
 
 @router.post("/admin/products/{slug}/delete")

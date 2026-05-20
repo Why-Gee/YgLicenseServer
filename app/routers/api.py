@@ -48,7 +48,7 @@ class CheckIn(BaseModel):
     key: str
     install_id: str
     version: str
-    # Optional self-reported webhook URL. Lets a per-tenant ASM install
+    # Optional self-reported webhook URL. Lets a per-tenant client install
     # register its outbound URL during phone-home (no admin UI step).
     # Accepted iff http(s):// and <=500 chars; trailing '/' stripped.
     public_url: str | None = None

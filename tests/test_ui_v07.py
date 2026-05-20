@@ -8,13 +8,13 @@ from fastapi.testclient import TestClient
 def _login(client: TestClient) -> dict[str, str]:
     r = client.post("/admin/login", data={"token": "test-admin"}, follow_redirects=False)
     assert r.status_code == 303, r.text
-    return {"asm_ls_session": r.cookies["asm_ls_session"]}
+    return {"ls_session": r.cookies["ls_session"]}
 
 
 def _csrf(cookies: dict[str, str]) -> str:
     from app.config import get_settings
     from app.security import csrf_token
-    return csrf_token(get_settings().session_secret, cookies["asm_ls_session"])
+    return csrf_token(get_settings().session_secret, cookies["ls_session"])
 
 
 def _create_product(client: TestClient, slug: str = "asm") -> None:
@@ -81,8 +81,8 @@ def test_products_tab_lists_products(client: TestClient) -> None:
     assert r.status_code == 200
     assert b'<code>asm</code>' in r.content
     assert b'<code>other</code>' in r.content
-    # New-product button still on this page.
-    assert b'href="/admin/products/new"' in r.content
+    # New-product button is now a modal trigger (was href="/admin/products/new").
+    assert b'data-product-modal="create"' in r.content
 
 
 def test_products_tab_link_in_nav(client: TestClient) -> None:

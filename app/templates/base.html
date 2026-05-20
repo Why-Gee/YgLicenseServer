@@ -200,7 +200,7 @@
     .toggle-switch.loading .btn-spinner { color:#fff; width:12px; height:12px; border-width:2px; }
   </style>
 </head>
-<body{% if request.cookies.get('asm_ls_session') %} data-has-sidebar="1"{% endif %}>
+<body{% if request.cookies.get(session_cookie_name) %} data-has-sidebar="1"{% endif %}>
   <!-- Apply the persisted sidebar-collapsed flag BEFORE first paint so the
        layout doesn't flash from expanded -> collapsed on every navigation. -->
   <script>
@@ -210,7 +210,7 @@
       }
     } catch (e) { /* localStorage disabled; sidebar just stays expanded */ }
   </script>
-  {% if request.cookies.get('asm_ls_session') %}
+  {% if request.cookies.get(session_cookie_name) %}
   <!-- Mobile topbar (visible <=768px). Hamburger summons the sidebar overlay. -->
   <div class="mobile-topbar">
     <button type="button" id="mobile-toggle" aria-label="Open menu">
