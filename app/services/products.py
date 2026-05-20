@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -159,7 +160,7 @@ def update_product(
         "jwt_issuer": jwt_issuer,
         "description": description,
     }
-    changes: dict[str, list] = {}
+    changes: dict[str, list[Any]] = {}
     for field, new_val in candidates.items():
         if new_val is None:
             continue
