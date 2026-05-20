@@ -152,3 +152,111 @@ def test_update_product_noop_writes_no_event(client: TestClient) -> None:
         products_svc.update_product(db, "myapp")  # nothing to change
         n_after = db.query(Event).filter_by(type="product:edited").count()
         assert n_before == n_after
+
+
+# ------------------------- router-level tests -----------------------------
+
+def _login(client: TestClient) -> dict[str, str]:
+    r = client.post("/admin/login", data={"token": "test-admin"}, follow_redirects=False)
+    assert r.status_code == 303
+    return {"ls_session": r.cookies["ls_session"]}
+
+
+def _csrf(cookies: dict[str, str]) -> str:
+    from app.config import get_settings
+    from app.security import csrf_token
+    return csrf_token(get_settings().session_secret, cookies["ls_session"])
+
+
+def _admin_create(client: TestClient, slug: str = "myapp") -> None:
+    r = client.post(
+        "/v1/admin/products",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"slug": slug, "name": slug.upper(), "key_prefix": slug},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_edit_route_requires_csrf(client: TestClient) -> None:
+    _admin_create(client)
+    cookies = _login(client)
+    r = client.post(
+        "/admin/products/myapp/edit",
+        data={"name": "x"},
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 403
+
+
+def test_edit_route_requires_login(client: TestClient) -> None:
+    _admin_create(client)
+    r = client.post(
+        "/admin/products/myapp/edit",
+        data={"name": "x", "csrf_token": "irrelevant"},
+        follow_redirects=False,
+    )
+    # LoginRequired handler emits a 303 to /admin/login.
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/admin/login")
+
+
+def test_edit_route_missing_product_404(client: TestClient) -> None:
+    cookies = _login(client)
+    r = client.post(
+        "/admin/products/nope/edit",
+        data={"name": "x", "csrf_token": _csrf(cookies)},
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 404
+
+
+def test_edit_route_success_redirects_with_product_edited(client: TestClient) -> None:
+    _admin_create(client)
+    cookies = _login(client)
+    r = client.post(
+        "/admin/products/myapp/edit",
+        data={
+            "slug": "myapp", "name": "Renamed",
+            "key_prefix": "myapp", "jwt_issuer": "",
+            "description": "",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/admin/products?product_edited=myapp"
+
+
+def test_edit_route_renames_slug_in_redirect(client: TestClient) -> None:
+    _admin_create(client, slug="orig")
+    cookies = _login(client)
+    r = client.post(
+        "/admin/products/orig/edit",
+        data={
+            "slug": "renamed", "name": "ORIG",
+            "key_prefix": "orig", "jwt_issuer": "",
+            "description": "",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/admin/products?product_edited=renamed"
+
+
+def test_edit_route_slug_collision_redirects_with_error(client: TestClient) -> None:
+    _admin_create(client, slug="a")
+    _admin_create(client, slug="b")
+    cookies = _login(client)
+    r = client.post(
+        "/admin/products/a/edit",
+        data={
+            "slug": "b", "name": "A",
+            "key_prefix": "a", "jwt_issuer": "",
+            "description": "",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/admin/products?error=slug+exists"
