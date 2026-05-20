@@ -121,6 +121,68 @@ def delete_product(
     return ProductDeletion(license_count=license_count)
 
 
+def update_product(
+    db: Session,
+    slug: str,
+    *,
+    new_slug: str | None = None,
+    name: str | None = None,
+    key_prefix: str | None = None,
+    jwt_issuer: str | None = None,
+    description: str | None = None,
+) -> Product:
+    """Edit an existing product. Each kwarg = None leaves that field unchanged.
+
+    Validates the slug + key_prefix regexes. Rejects a slug rename that would
+    collide with another product. Writes a `product:edited` Event whose
+    payload diff records only the fields that actually changed; no-op edits
+    write no event. Single commit.
+    """
+    p = db.query(Product).filter_by(slug=slug).one_or_none()
+    if p is None:
+        raise NotFound("product not found")
+
+    if new_slug is not None and new_slug != p.slug:
+        if not _SLUG_RE.match(new_slug):
+            raise ValidationFailed("invalid slug (lowercase a-z0-9-, max 63)")
+        if db.query(Product).filter_by(slug=new_slug).one_or_none() is not None:
+            raise Conflict("slug already exists")
+    if key_prefix is not None and key_prefix != p.key_prefix:
+        if not _PREFIX_RE.match(key_prefix):
+            raise ValidationFailed("invalid key_prefix (lowercase a-z0-9_, max 15)")
+
+    # Build the diff before mutating so we record old->new per changed field.
+    candidates = {
+        "slug": new_slug,
+        "name": name,
+        "key_prefix": key_prefix,
+        "jwt_issuer": jwt_issuer,
+        "description": description,
+    }
+    changes: dict[str, list] = {}
+    for field, new_val in candidates.items():
+        if new_val is None:
+            continue
+        old_val = getattr(p, field)
+        if new_val != old_val:
+            changes[field] = [old_val, new_val]
+
+    if not changes:
+        return p  # idempotent submit; no event noise
+
+    for field, (_, new_val) in changes.items():
+        setattr(p, field, new_val)
+
+    db.add(Event(
+        product_id=p.id,
+        type="product:edited",
+        payload={"slug": slug, "changes": changes},
+    ))
+    db.commit()
+    db.refresh(p)
+    return p
+
+
 def list_products(db: Session) -> list[Product]:
     return list(db.query(Product).order_by(Product.created_at.desc()).all())
 
