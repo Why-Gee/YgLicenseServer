@@ -292,6 +292,11 @@
     <div class="topbar-right">{% block topbar_right %}{% endblock %}</div>
   </header>
   {% endif %}
+  <!-- Loaded BEFORE <main> so window helpers (confirmModal, showButtonBusy,
+       makeDirtyGuard) are defined when page-level inline scripts in the
+       content block run. DOM-touching setup inside admin.js is wrapped in
+       ready(...) so it still waits for the body to finish parsing. -->
+  <script src="/static/admin.js?v={{ app_version }}"></script>
   <main>
     {% block content %}{% endblock %}
   </main>
@@ -308,7 +313,5 @@
       </div>
     </div>
   </div>
-
-  <script src="/static/admin.js?v={{ app_version }}"></script>
 </body>
 </html>

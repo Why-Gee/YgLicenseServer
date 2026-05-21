@@ -1,5 +1,17 @@
 // Admin UI shared JS. Loaded once from base.html; per-page scripts stay
 // inline so they can bind to template data without an extra fetch.
+//
+// Loaded BEFORE <main> so window helpers (confirmModal, showButtonBusy,
+// makeDirtyGuard) are defined when page-level inline scripts run. DOM-touching
+// setup is wrapped in ready(...) so it runs after the body is parsed.
+
+function ready(fn) {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', fn);
+  } else {
+    fn();
+  }
+}
 
 // Promise-based modal confirm. Replaces window.confirm for our destructive
 // flows. Esc / clicking the backdrop = cancel; Enter = confirm.
@@ -41,18 +53,20 @@ window.confirmModal = function (opts) {
 // on OK, re-fires the click with a flag that bypasses this handler so
 // native form-submit / formaction takes over. Use for revoke / disable /
 // enable / any future single-action confirm.
-document.querySelectorAll('button[data-confirm-title]').forEach(function (btn) {
-  btn.addEventListener('click', async function (e) {
-    if (btn.dataset.confirmed === '1') return;
-    e.preventDefault();
-    var ok = await window.confirmModal({
-      title: btn.dataset.confirmTitle,
-      body: btn.dataset.confirmBody || '',
-      confirmLabel: btn.dataset.confirmLabel || 'Continue',
+ready(function () {
+  document.querySelectorAll('button[data-confirm-title]').forEach(function (btn) {
+    btn.addEventListener('click', async function (e) {
+      if (btn.dataset.confirmed === '1') return;
+      e.preventDefault();
+      var ok = await window.confirmModal({
+        title: btn.dataset.confirmTitle,
+        body: btn.dataset.confirmBody || '',
+        confirmLabel: btn.dataset.confirmLabel || 'Continue',
+      });
+      if (!ok) return;
+      btn.dataset.confirmed = '1';
+      btn.click();
     });
-    if (!ok) return;
-    btn.dataset.confirmed = '1';
-    btn.click();
   });
 });
 
@@ -95,30 +109,32 @@ document.addEventListener('submit', function (e) {
 // the textContent of the matched element and writes it to the clipboard.
 // Briefly swaps the button label to confirm. Falls back to a textarea +
 // execCommand path for browsers that block clipboard API on http://.
-document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
-  btn.addEventListener('click', async function () {
-    var src = document.querySelector(btn.dataset.copyFrom);
-    if (!src) return;
-    var text = src.textContent.trim();
-    var ok = false;
-    try {
-      await navigator.clipboard.writeText(text);
-      ok = true;
-    } catch (e) {
-      var ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
-      document.body.removeChild(ta);
-    }
-    if (!ok) { alert('Could not copy. Select the text manually.'); return; }
-    var orig = btn.innerHTML;
-    btn.innerHTML = '✓ Copied';
-    btn.disabled = true;
-    setTimeout(function () { btn.innerHTML = orig; btn.disabled = false; }, 1500);
+ready(function () {
+  document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      var src = document.querySelector(btn.dataset.copyFrom);
+      if (!src) return;
+      var text = src.textContent.trim();
+      var ok = false;
+      try {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      } catch (e) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+        document.body.removeChild(ta);
+      }
+      if (!ok) { alert('Could not copy. Select the text manually.'); return; }
+      var orig = btn.innerHTML;
+      btn.innerHTML = '✓ Copied';
+      btn.disabled = true;
+      setTimeout(function () { btn.innerHTML = orig; btn.disabled = false; }, 1500);
+    });
   });
 });
 
@@ -127,7 +143,7 @@ document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
 // "text"|"number"|"date"). First click on a column = ascending; clicking
 // the active column flips direction. Cell value is data-sort-value if
 // present, else textContent (so badges/spans sort by their text).
-(function () {
+ready(function () {
   function cellValue(row, idx, type) {
     var cell = row.children[idx];
     if (!cell) return type === 'number' ? -Infinity : '';
@@ -167,12 +183,12 @@ document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
       });
     });
   });
-})();
+});
 
 // Auto-wires any <form class="bulk-form" data-name="..."> so its bulk-delete
 // button is hidden until at least one row is checked. Click runs a two-stage
 // modal confirm using data-confirm1-* and data-confirm2-* on the form.
-(function () {
+ready(function () {
   document.querySelectorAll('form.bulk-form').forEach(function (form) {
     var name = form.dataset.name;
     var btn = form.querySelector('[data-bulk-btn]');
@@ -222,7 +238,7 @@ document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
     });
     update();
   });
-})();
+});
 
 // Client-side row filter for tables with lots of rows. Opt in by adding
 // `data-filter-target="#sel"` to an <input>; the selector points at the
@@ -231,7 +247,7 @@ document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
 //
 // Used on customers, licenses (per product), events. Works alongside the
 // existing data-sortable behavior on the same table.
-(function () {
+ready(function () {
   function applyFilter(input) {
     var sel = input.getAttribute('data-filter-target');
     if (!sel) return;
@@ -259,13 +275,13 @@ document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
     // Pre-apply in case the input has a value from the URL (deep-link).
     if (input.value) applyFilter(input);
   });
-})();
+});
 
 // Sidebar: collapse/expand toggle (persisted via localStorage), active-link
 // highlight by URL prefix, mobile overlay open/close. The pre-paint script
 // in base.html already applied data-collapsed; here we wire the controls
 // and the resize behavior.
-(function () {
+ready(function () {
   var body = document.body;
   if (body.getAttribute('data-has-sidebar') !== '1') return;  // not logged in
 
@@ -335,7 +351,7 @@ document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') closeMobile();
   });
-})();
+});
 
 // Modal dirty-guard helper. Encapsulates the "snapshot fields on open,
 // detect dirty close, show Save/Discard/Cancel sheet" state machine shared
