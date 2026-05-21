@@ -301,3 +301,136 @@ def test_create_collision_redirects_to_products_list(client: TestClient) -> None
     )
     assert r.status_code == 303
     assert r.headers["location"] == "/admin/products?error=slug+exists"
+
+
+# ------------------------- new sentinel / clear-semantics tests -----------
+
+def test_update_product_clears_description(client: TestClient) -> None:
+    """description="" clears the column to NULL and writes the diff."""
+    from app.services.errors import NotFound  # noqa: F401  (mirrors pattern elsewhere)
+    _seed_product()
+    # First, give it a description so we have something to clear.
+    with db_mod.SessionLocal() as db:
+        products_svc.update_product(db, "myapp", description="hello")
+    # Now clear it via the new "" semantic.
+    with db_mod.SessionLocal() as db:
+        products_svc.update_product(db, "myapp", description="")
+        p = db.query(Product).filter_by(slug="myapp").one()
+        assert p.description is None
+        ev = (
+            db.query(Event)
+            .filter_by(type="product:edited")
+            .order_by(Event.id.desc())
+            .first()
+        )
+        assert ev.payload["changes"] == {"description": ["hello", None]}
+
+
+def test_update_product_empty_description_on_null_is_noop(client: TestClient) -> None:
+    """If description is already NULL, submitting "" writes no event."""
+    _seed_product()  # description starts as None
+    with db_mod.SessionLocal() as db:
+        n_before = db.query(Event).filter_by(type="product:edited").count()
+        products_svc.update_product(db, "myapp", description="")
+        n_after = db.query(Event).filter_by(type="product:edited").count()
+        assert n_before == n_after
+        assert db.query(Product).filter_by(slug="myapp").one().description is None
+
+
+def test_update_product_clears_jwt_issuer_to_default(client: TestClient) -> None:
+    """jwt_issuer="" resets to the default <slug>-license-server."""
+    _seed_product()
+    with db_mod.SessionLocal() as db:
+        products_svc.update_product(db, "myapp", jwt_issuer="custom-iss")
+    with db_mod.SessionLocal() as db:
+        products_svc.update_product(db, "myapp", jwt_issuer="")
+        p = db.query(Product).filter_by(slug="myapp").one()
+        assert p.jwt_issuer == "myapp-license-server"
+
+
+def test_update_product_clear_jwt_issuer_uses_new_slug_when_renaming(client: TestClient) -> None:
+    """Rename + clear jwt_issuer in one call: default uses the NEW slug."""
+    _seed_product()
+    with db_mod.SessionLocal() as db:
+        products_svc.update_product(db, "myapp", jwt_issuer="custom-iss")
+    with db_mod.SessionLocal() as db:
+        products_svc.update_product(db, "myapp", new_slug="renamed", jwt_issuer="")
+        p = db.query(Product).filter_by(slug="renamed").one()
+        assert p.jwt_issuer == "renamed-license-server"
+
+
+def test_update_product_rejects_empty_required_fields(client: TestClient) -> None:
+    """Empty slug/name/key_prefix → ValidationFailed (defense-in-depth)."""
+    from app.services.errors import ValidationFailed
+    _seed_product()
+    for field, value in [("new_slug", ""), ("name", ""), ("key_prefix", "")]:
+        with db_mod.SessionLocal() as db, pytest.raises(ValidationFailed):
+            products_svc.update_product(db, "myapp", **{field: value})
+
+
+def test_edit_route_clears_description_via_empty_field(client: TestClient) -> None:
+    """POST description="" on a product that HAS a description → cleared."""
+    _admin_create(client)
+    cookies = _login(client)
+    # Give it a description first.
+    client.post(
+        "/admin/products/myapp/edit",
+        data={
+            "slug": "myapp", "name": "MYAPP",
+            "key_prefix": "myapp", "jwt_issuer": "",
+            "description": "to-be-cleared",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    # Now clear it.
+    r = client.post(
+        "/admin/products/myapp/edit",
+        data={
+            "slug": "myapp", "name": "MYAPP",
+            "key_prefix": "myapp", "jwt_issuer": "",
+            "description": "",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    import app.db as db_mod
+    from app.models import Product
+    with db_mod.SessionLocal() as db:
+        p = db.query(Product).filter_by(slug="myapp").one()
+        assert p.description is None
+
+
+def test_edit_route_resets_jwt_issuer_to_default_via_empty_field(client: TestClient) -> None:
+    """POST jwt_issuer="" → resets to <slug>-license-server."""
+    _admin_create(client)
+    cookies = _login(client)
+    # Set a custom issuer.
+    client.post(
+        "/admin/products/myapp/edit",
+        data={
+            "slug": "myapp", "name": "MYAPP",
+            "key_prefix": "myapp", "jwt_issuer": "custom-iss",
+            "description": "",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    # Now clear (reset to default).
+    r = client.post(
+        "/admin/products/myapp/edit",
+        data={
+            "slug": "myapp", "name": "MYAPP",
+            "key_prefix": "myapp", "jwt_issuer": "",
+            "description": "",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    import app.db as db_mod
+    from app.models import Product
+    with db_mod.SessionLocal() as db:
+        p = db.query(Product).filter_by(slug="myapp").one()
+        assert p.jwt_issuer == "myapp-license-server"

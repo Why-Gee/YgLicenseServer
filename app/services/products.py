@@ -17,6 +17,17 @@ _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _PREFIX_RE = re.compile(r"^[a-z0-9_]{1,15}$")
 
 
+class _Unset:
+    """Sentinel: kwarg was not provided → leave the field unchanged.
+    Distinct from None so we can interpret "" as 'clear/default' without
+    aliasing it to the no-change case."""
+    def __repr__(self) -> str:
+        return "<unset>"
+
+
+UNSET = _Unset()
+
+
 @dataclass(frozen=True)
 class ProductDeletion:
     """Result of a cascading product delete. `license_count` is the number
@@ -126,33 +137,55 @@ def update_product(
     db: Session,
     slug: str,
     *,
-    new_slug: str | None = None,
-    name: str | None = None,
-    key_prefix: str | None = None,
-    jwt_issuer: str | None = None,
-    description: str | None = None,
+    new_slug: str | _Unset = UNSET,
+    name: str | _Unset = UNSET,
+    key_prefix: str | _Unset = UNSET,
+    jwt_issuer: str | _Unset = UNSET,
+    description: str | _Unset = UNSET,
 ) -> Product:
-    """Edit an existing product. Each kwarg = None leaves that field unchanged.
+    """Edit an existing product.
 
-    Validates the slug + key_prefix regexes. Rejects a slug rename that would
-    collide with another product. Writes a `product:edited` Event whose
-    payload diff records only the fields that actually changed; no-op edits
-    write no event. Single commit.
+    Each kwarg has three-way semantics:
+      - UNSET (default)  → no change
+      - ""               → clear/reset (NULL for description, default-derived
+                            for jwt_issuer, ValidationFailed for required
+                            fields slug/name/key_prefix)
+      - any other string → set to this value (regex-validated for slug/prefix)
+
+    Single commit. Writes a `product:edited` Event whose payload diff records
+    only the fields that actually changed; no-op edits write no event.
     """
     p = db.query(Product).filter_by(slug=slug).one_or_none()
     if p is None:
         raise NotFound("product not found")
 
-    if new_slug is not None and new_slug != p.slug:
+    # Required fields: empty string is invalid input (the modal's HTML5
+    # `required` blocks this client-side; defense-in-depth here).
+    if isinstance(new_slug, str) and new_slug == "":
+        raise ValidationFailed("slug is required")
+    if isinstance(name, str) and name == "":
+        raise ValidationFailed("name is required")
+    if isinstance(key_prefix, str) and key_prefix == "":
+        raise ValidationFailed("key_prefix is required")
+
+    # Format validation (only when actually changing the value).
+    if isinstance(new_slug, str) and new_slug != p.slug:
         if not _SLUG_RE.match(new_slug):
             raise ValidationFailed("invalid slug (lowercase a-z0-9-, max 63)")
         if db.query(Product).filter_by(slug=new_slug).one_or_none() is not None:
             raise Conflict("slug already exists")
-    if key_prefix is not None and key_prefix != p.key_prefix:
+    if isinstance(key_prefix, str) and key_prefix != p.key_prefix:
         if not _PREFIX_RE.match(key_prefix):
             raise ValidationFailed("invalid key_prefix (lowercase a-z0-9_, max 15)")
 
-    # Build the diff before mutating so we record old->new per changed field.
+    # Resolve "clear" semantics for optional fields.
+    target_slug = new_slug if isinstance(new_slug, str) else p.slug
+    if jwt_issuer == "":
+        jwt_issuer = f"{target_slug}-license-server"
+    if description == "":
+        description = None  # nullable column; "" clears to NULL
+
+    # Build the diff. UNSET → skip; any concrete value is a candidate.
     candidates = {
         "slug": new_slug,
         "name": name,
@@ -162,14 +195,14 @@ def update_product(
     }
     changes: dict[str, list[Any]] = {}
     for field, new_val in candidates.items():
-        if new_val is None:
+        if isinstance(new_val, _Unset):
             continue
         old_val = getattr(p, field)
         if new_val != old_val:
             changes[field] = [old_val, new_val]
 
     if not changes:
-        return p  # idempotent submit; no event noise
+        return p  # nothing changed — skip event
 
     for field, (_, new_val) in changes.items():
         setattr(p, field, new_val)
