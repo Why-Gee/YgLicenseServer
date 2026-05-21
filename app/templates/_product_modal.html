@@ -48,7 +48,7 @@
       <div>
         <label for="pm-slug">Slug</label>
         <input id="pm-slug" name="slug" required pattern="[a-z0-9][a-z0-9-]{0,62}" placeholder="myapp">
-        <small id="pm-slug-create" class="muted">lowercase, a–z 0–9 –, max 63. URL-safe.</small>
+        <small class="muted" style="display:block;">lowercase, a–z 0–9 –, max 63. URL-safe.</small>
         <small id="pm-slug-edit" class="muted" style="display:none;">renaming changes admin URLs + Stripe webhook path — update any external integrations that point at the old slug.</small>
       </div>
       <div>
@@ -58,13 +58,13 @@
       <div>
         <label for="pm-key-prefix">License-Key Prefix</label>
         <input id="pm-key-prefix" name="key_prefix" required pattern="[a-z0-9_]{1,15}" placeholder="myapp">
-        <small id="pm-prefix-create" class="muted">keys for this product look like <code>myapp_aB7…</code>. lowercase a–z 0–9 _, max 15.</small>
+        <small class="muted" style="display:block;">keys for this product look like <code>myapp_aB7…</code>. lowercase a–z 0–9 _, max 15.</small>
         <small id="pm-prefix-edit" class="muted" style="display:none;">only affects keys issued from now on. existing keys keep their original prefix and continue to validate.</small>
       </div>
       <div>
         <label for="pm-jwt-issuer">JWT Issuer <span class="muted" style="font-weight:normal;font-size:.85em;">(Optional)</span></label>
         <input id="pm-jwt-issuer" name="jwt_issuer" placeholder="myapp-license-server">
-        <small id="pm-issuer-create" class="muted">defaults to <code>&lt;slug&gt;-license-server</code>.</small>
+        <small class="muted" style="display:block;">defaults to <code>&lt;slug&gt;-license-server</code>.</small>
         <small id="pm-issuer-edit" class="muted" style="display:none;">only affects JWTs issued from now on. clients pick up the new <code>iss</code> at next phone-home.</small>
       </div>
       <div>
@@ -109,11 +109,8 @@
   var prefixIn = document.getElementById('pm-key-prefix');
   var issuerIn = document.getElementById('pm-jwt-issuer');
   var descIn = document.getElementById('pm-description');
-  var slugCreate = document.getElementById('pm-slug-create');
   var slugEdit = document.getElementById('pm-slug-edit');
-  var prefixCreate = document.getElementById('pm-prefix-create');
   var prefixEdit = document.getElementById('pm-prefix-edit');
-  var issuerCreate = document.getElementById('pm-issuer-create');
   var issuerEdit = document.getElementById('pm-issuer-edit');
   var submitBtn = document.getElementById('pm-submit');
   var cancelBtn = document.getElementById('pm-cancel');
@@ -158,9 +155,9 @@
       prefixIn.value = prod.key_prefix;
       issuerIn.value = prod.jwt_issuer;
       descIn.value = prod.description;
-      slugCreate.style.display = 'none'; slugEdit.style.display = '';
-      prefixCreate.style.display = 'none'; prefixEdit.style.display = '';
-      issuerCreate.style.display = 'none'; issuerEdit.style.display = '';
+      slugEdit.style.display = 'block';
+      prefixEdit.style.display = 'block';
+      issuerEdit.style.display = 'block';
     } else {
       titleEl.textContent = 'New Product';
       submitBtn.textContent = 'Create Product';
@@ -171,9 +168,9 @@
       prefixIn.value = '';
       issuerIn.value = '';
       descIn.value = '';
-      slugCreate.style.display = ''; slugEdit.style.display = 'none';
-      prefixCreate.style.display = ''; prefixEdit.style.display = 'none';
-      issuerCreate.style.display = ''; issuerEdit.style.display = 'none';
+      slugEdit.style.display = 'none';
+      prefixEdit.style.display = 'none';
+      issuerEdit.style.display = 'none';
     }
     ov.style.display = '';
     document.addEventListener('keydown', onKey);

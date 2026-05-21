@@ -235,7 +235,12 @@
       {{ csrf_input(request) }}
       <div id="lm-key-row" style="display:none;grid-column:1/-1;">
         <label>Key</label>
-        <pre id="lm-key" style="font-size:.85em;margin:0;"></pre>
+        <div style="display:flex;gap:.4em;align-items:flex-start;">
+          <pre id="lm-key" style="font-size:.85em;margin:0;flex:1;"></pre>
+          <button type="button" class="btn muted" data-copy-from="#lm-key"
+                  style="font-size:.85em;padding:.25em .7em;white-space:nowrap;">Copy</button>
+        </div>
+        <div id="lm-key-email" class="muted" style="font-size:.85em;margin-top:.3em;"></div>
       </div>
       <div id="lm-email-row" style="grid-column:1/-1;">
         <label>Customer Email</label>
@@ -255,7 +260,7 @@
       <div id="lm-valid-until-wrap" style="display:none;"><label>Valid Until</label><input id="lm-valid-until" name="valid_until" type="datetime-local"></div>
       <div style="grid-column:1/-1;">
         <label>Features (JSON)</label>
-        <input id="lm-features" name="features_json" placeholder='{"chat_agent":true,"no_ads":false}'>
+        <input id="lm-features" name="features_json" placeholder='{"premium": true, "trial": false}'>
       </div>
       <div style="grid-column:1/-1;border-top:1px solid var(--bd);padding-top:.7em;margin-top:.3em;">
         <label style="margin-top:0;font-weight:600;color:var(--fg);">Webhook (Optional)</label>
@@ -325,6 +330,7 @@
   var customerLink = document.getElementById('lm-customer-link');
   var keyRow = document.getElementById('lm-key-row');
   var keyEl = document.getElementById('lm-key');
+  var keyEmailEl = document.getElementById('lm-key-email');
   var planIn = document.getElementById('lm-plan');
   var maxIn = document.getElementById('lm-max-users');
   var validDaysWrap = document.getElementById('lm-valid-days-wrap');
@@ -483,7 +489,8 @@
       emailIn.removeAttribute('name');
       emailIn.removeAttribute('required');
       keyRow.style.display = '';
-      keyEl.textContent = lic.key + '\n\n' + lic.email;
+      keyEl.textContent = lic.key;
+      keyEmailEl.textContent = lic.email;
       // Edit mode: customer name is read-only. The license-edit endpoint
       // doesn't accept this field anymore (renaming a tenant-wide Customer
       // from a license form would silently rename them on every other
@@ -543,6 +550,7 @@
       if (nameHint) nameHint.style.display = 'none';
       keyRow.style.display = 'none';
       keyEl.textContent = '';
+      keyEmailEl.textContent = '';
       planIn.value = 'standard';
       maxIn.value = 10;
       validDaysWrap.style.display = '';
@@ -551,7 +559,7 @@
       validUntilWrap.style.display = 'none';
       validUntilIn.removeAttribute('name');
       validUntilIn.removeAttribute('required');
-      featIn.value = '{"chat_agent": true}';
+      featIn.value = '';
       whIn.value = '';
       rotateRow.style.display = 'none';
       rotateCb.checked = false;
