@@ -439,3 +439,87 @@ def test_edit_route_resets_jwt_issuer_to_default_via_empty_field(client: TestCli
     with db_mod.SessionLocal() as db:
         p = db.query(Product).filter_by(slug="myapp").one()
         assert p.jwt_issuer == "myapp-license-server"
+
+
+# ------------------------- return_to=detail redirect tests (v0.20.0) ------
+
+def test_edit_route_return_to_detail_redirects_to_detail(client: TestClient) -> None:
+    """return_to=detail success → /admin/products/<slug>?product_edited=1."""
+    _admin_create(client)
+    cookies = _login(client)
+    r = client.post(
+        "/admin/products/myapp/edit",
+        data={
+            "slug": "myapp", "name": "Renamed",
+            "key_prefix": "myapp", "jwt_issuer": "",
+            "description": "",
+            "return_to": "detail",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/admin/products/myapp?product_edited=1"
+
+
+def test_edit_route_return_to_detail_uses_new_slug_after_rename(client: TestClient) -> None:
+    """return_to=detail + rename → /admin/products/<new_slug>?product_edited=1."""
+    _admin_create(client, slug="orig")
+    cookies = _login(client)
+    r = client.post(
+        "/admin/products/orig/edit",
+        data={
+            "slug": "renamed", "name": "ORIG",
+            "key_prefix": "orig", "jwt_issuer": "",
+            "description": "",
+            "return_to": "detail",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/admin/products/renamed?product_edited=1"
+
+
+def test_edit_route_return_to_detail_error_redirects_to_original_detail(client: TestClient) -> None:
+    """return_to=detail on Conflict → /admin/products/<orig_slug>?error=..."""
+    _admin_create(client, slug="a")
+    _admin_create(client, slug="b")
+    cookies = _login(client)
+    r = client.post(
+        "/admin/products/a/edit",
+        data={
+            "slug": "b", "name": "A",
+            "key_prefix": "a", "jwt_issuer": "",
+            "description": "",
+            "return_to": "detail",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/admin/products/a?error=slug+exists"
+
+
+def test_product_detail_banner_renders_on_product_edited_param(client: TestClient) -> None:
+    """GET /admin/products/<slug>?product_edited=1 shows the success banner."""
+    _admin_create(client)
+    cookies = _login(client)
+    r = client.get("/admin/products/myapp?product_edited=1", cookies=cookies)
+    assert r.status_code == 200
+    assert "product updated." in r.text
+
+
+def test_product_detail_has_edit_button(client: TestClient) -> None:
+    """Product Info card includes an Edit button that triggers the modal."""
+    _admin_create(client)
+    cookies = _login(client)
+    r = client.get("/admin/products/myapp", cookies=cookies)
+    assert r.status_code == 200
+    # The button uses the same data-product-modal protocol as products.html.
+    assert 'data-product-modal="edit"' in r.text
+    assert 'data-product-slug="myapp"' in r.text
+    # And the modal partial is included (look for a unique element id).
+    assert 'id="product-modal"' in r.text
+    # ...with return_to=detail so the post-edit redirect lands back here.
+    assert 'name="return_to" value="detail"' in r.text

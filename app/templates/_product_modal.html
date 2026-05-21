@@ -1,0 +1,199 @@
+{# Unified Product create/edit modal — shared between the products list and
+   product detail pages. The caller sets two Jinja vars before including:
+     modal_products    — list[Product] available to the modal's JSON payload
+                         (the list view passes every product; the detail view
+                         passes just the one being shown).
+     modal_return_to   — "list" or "detail". The form posts this as the
+                         return_to field; the router redirects to the
+                         products listing or back to the product detail page
+                         accordingly. Defaults to "list" if unset.
+   Triggers: any element with data-product-modal="create" opens create mode;
+   data-product-modal="edit" + data-product-slug="<slug>" opens edit mode
+   pre-filled from the JSON payload. #}
+{% set _modal_return_to = modal_return_to | default('list') %}
+
+{# Per-product JSON payload consumed by the modal JS to pre-fill edit mode. #}
+<script type="application/json" id="products-data">
+{
+  "products": [
+    {% for p in modal_products %}
+    {
+      "slug": {{ p.slug|tojson }},
+      "name": {{ p.name|tojson }},
+      "key_prefix": {{ p.key_prefix|tojson }},
+      "jwt_issuer": {{ p.jwt_issuer|tojson }},
+      "description": {{ (p.description or '')|tojson }}
+    }{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ]
+}
+</script>
+
+<div id="product-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="pm-title">
+  <div class="modal-card" style="max-width:600px;position:relative;">
+    <button type="button" id="pm-close" class="btn-icon"
+            style="position:absolute;top:.5em;right:.5em;color:var(--muted);"
+            title="Close" aria-label="Close">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8z"/>
+      </svg>
+    </button>
+    <h3 id="pm-title" style="margin-top:0;">New Product</h3>
+    <p id="pm-create-blurb" class="muted" style="margin-top:0;display:none;">
+      creating a product generates a fresh ed25519 keypair. private key stays in the database; public key gets baked into the client app's image.
+    </p>
+    <form id="pm-form" method="post" style="display:grid;gap:.5em;">
+      {{ csrf_input(request) }}
+      <input type="hidden" name="return_to" value="{{ _modal_return_to }}">
+      <div>
+        <label for="pm-slug">Slug</label>
+        <input id="pm-slug" name="slug" required pattern="[a-z0-9][a-z0-9-]{0,62}" placeholder="myapp">
+        <small id="pm-slug-create" class="muted">lowercase, a–z 0–9 –, max 63. URL-safe.</small>
+        <small id="pm-slug-edit" class="muted" style="display:none;">renaming changes admin URLs + Stripe webhook path — update any external integrations that point at the old slug.</small>
+      </div>
+      <div>
+        <label for="pm-name">Display Name</label>
+        <input id="pm-name" name="name" required placeholder="My Application">
+      </div>
+      <div>
+        <label for="pm-key-prefix">License-Key Prefix</label>
+        <input id="pm-key-prefix" name="key_prefix" required pattern="[a-z0-9_]{1,15}" placeholder="myapp">
+        <small id="pm-prefix-create" class="muted">keys for this product look like <code>myapp_aB7…</code>. lowercase a–z 0–9 _, max 15.</small>
+        <small id="pm-prefix-edit" class="muted" style="display:none;">only affects keys issued from now on. existing keys keep their original prefix and continue to validate.</small>
+      </div>
+      <div>
+        <label for="pm-jwt-issuer">JWT Issuer <span class="muted" style="font-weight:normal;font-size:.85em;">(Optional)</span></label>
+        <input id="pm-jwt-issuer" name="jwt_issuer" placeholder="myapp-license-server">
+        <small id="pm-issuer-create" class="muted">defaults to <code>&lt;slug&gt;-license-server</code>.</small>
+        <small id="pm-issuer-edit" class="muted" style="display:none;">only affects JWTs issued from now on. clients pick up the new <code>iss</code> at next phone-home.</small>
+      </div>
+      <div>
+        <label for="pm-description">Description <span class="muted" style="font-weight:normal;font-size:.85em;">(Optional)</span></label>
+        <textarea id="pm-description" name="description" rows="3"></textarea>
+      </div>
+      <div class="modal-actions" style="margin-top:.4em;">
+        <button type="button" class="btn muted" id="pm-cancel">Cancel</button>
+        <button type="submit" id="pm-submit" class="btn">Create Product</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# Unsaved-changes confirm. z-index above the product modal. #}
+<div id="pm-discard-confirm" class="modal-overlay" style="display:none;z-index:1100;" role="dialog" aria-modal="true" aria-labelledby="pmdc-title">
+  <div class="modal-card" style="max-width:420px;">
+    <h3 id="pmdc-title" style="margin-top:0;">Unsaved Changes</h3>
+    <p>You have unsaved changes. Save them, discard them, or keep editing?</p>
+    <div class="modal-actions">
+      <button type="button" class="btn muted" id="pmdc-cancel">Cancel</button>
+      <button type="button" class="btn danger" id="pmdc-discard">Discard</button>
+      <button type="button" class="btn" id="pmdc-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var dataEl = document.getElementById('products-data');
+  if (!dataEl) return;
+  var data = JSON.parse(dataEl.textContent);
+  var bySlug = {};
+  data.products.forEach(function (p) { bySlug[p.slug] = p; });
+
+  var ov = document.getElementById('product-modal');
+  var form = document.getElementById('pm-form');
+  var titleEl = document.getElementById('pm-title');
+  var blurb = document.getElementById('pm-create-blurb');
+  var slugIn = document.getElementById('pm-slug');
+  var nameIn = document.getElementById('pm-name');
+  var prefixIn = document.getElementById('pm-key-prefix');
+  var issuerIn = document.getElementById('pm-jwt-issuer');
+  var descIn = document.getElementById('pm-description');
+  var slugCreate = document.getElementById('pm-slug-create');
+  var slugEdit = document.getElementById('pm-slug-edit');
+  var prefixCreate = document.getElementById('pm-prefix-create');
+  var prefixEdit = document.getElementById('pm-prefix-edit');
+  var issuerCreate = document.getElementById('pm-issuer-create');
+  var issuerEdit = document.getElementById('pm-issuer-edit');
+  var submitBtn = document.getElementById('pm-submit');
+  var cancelBtn = document.getElementById('pm-cancel');
+  var closeBtn = document.getElementById('pm-close');
+
+  function close() {
+    ov.style.display = 'none';
+    document.removeEventListener('keydown', onKey);
+    guard.clearSnapshot();
+  }
+  function onKey(e) { if (e.key === 'Escape') guard.attemptClose(); }
+
+  var guard = window.makeDirtyGuard({
+    form: form,
+    snapshot: function () {
+      return JSON.stringify({
+        slug: slugIn.value, name: nameIn.value, prefix: prefixIn.value,
+        issuer: issuerIn.value, desc: descIn.value,
+      });
+    },
+    onClose: close,
+    discardConfirm: {
+      overlay: document.getElementById('pm-discard-confirm'),
+      cancelBtn: document.getElementById('pmdc-cancel'),
+      discardBtn: document.getElementById('pmdc-discard'),
+      saveBtn: document.getElementById('pmdc-save'),
+    },
+  });
+
+  cancelBtn.addEventListener('click', guard.attemptClose);
+  closeBtn.addEventListener('click', guard.attemptClose);
+  ov.addEventListener('click', function (e) { if (e.target === ov) guard.attemptClose(); });
+
+  function open(mode, prod) {
+    if (mode === 'edit') {
+      titleEl.textContent = 'Edit Product';
+      submitBtn.textContent = 'Save';
+      blurb.style.display = 'none';
+      form.action = '/admin/products/' + prod.slug + '/edit';
+      slugIn.value = prod.slug;
+      nameIn.value = prod.name;
+      prefixIn.value = prod.key_prefix;
+      issuerIn.value = prod.jwt_issuer;
+      descIn.value = prod.description;
+      slugCreate.style.display = 'none'; slugEdit.style.display = '';
+      prefixCreate.style.display = 'none'; prefixEdit.style.display = '';
+      issuerCreate.style.display = 'none'; issuerEdit.style.display = '';
+    } else {
+      titleEl.textContent = 'New Product';
+      submitBtn.textContent = 'Create Product';
+      blurb.style.display = '';
+      form.action = '/admin/products';
+      slugIn.value = '';
+      nameIn.value = '';
+      prefixIn.value = '';
+      issuerIn.value = '';
+      descIn.value = '';
+      slugCreate.style.display = ''; slugEdit.style.display = 'none';
+      prefixCreate.style.display = ''; prefixEdit.style.display = 'none';
+      issuerCreate.style.display = ''; issuerEdit.style.display = 'none';
+    }
+    ov.style.display = '';
+    document.addEventListener('keydown', onKey);
+    guard.takeSnapshot();
+    setTimeout(function () {
+      (mode === 'edit' ? nameIn : slugIn).focus();
+    }, 50);
+  }
+
+  document.querySelectorAll('[data-product-modal]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      var mode = btn.dataset.productModal;
+      if (mode === 'edit') {
+        var p = bySlug[btn.dataset.productSlug];
+        if (p) open('edit', p);
+      } else {
+        open('create', null);
+      }
+    });
+  });
+})();
+</script>

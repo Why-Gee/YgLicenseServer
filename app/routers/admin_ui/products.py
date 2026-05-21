@@ -67,6 +67,7 @@ def product_edit(
     key_prefix: str = Form(""),
     jwt_issuer: str = Form(""),
     description: str = Form(""),
+    return_to: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ) -> Response:
@@ -75,9 +76,19 @@ def product_edit(
     The modal always submits all five fields. Empty values are forwarded as-is;
     the service interprets "" as 'clear/default' per field (NULL for
     description, default-derived for jwt_issuer, error for required fields).
+
+    return_to controls the post-edit redirect target so the admin lands back
+    where they were:
+      - "detail" -> /admin/products/<slug>?product_edited=1 (and on error,
+        back to the same detail page with ?error=<code>). Used by the modal
+        included on product_detail.html.
+      - anything else (incl. "list" or "") -> /admin/products?product_edited=
+        <slug> on success, /admin/products?error=<code> on error. Used by
+        the modal on the products listing page.
     """
     require_login(request)
     require_csrf(request, csrf_token)
+    to_detail = return_to == "detail"
     try:
         p = products_svc.update_product(
             db, slug,
@@ -90,7 +101,19 @@ def product_edit(
     except NotFound as e:
         raise HTTPException(status_code=404) from e
     except (Conflict, ValidationFailed) as e:
-        return RedirectResponse(f"/admin/products?error={err_code(e)}", status_code=303)
+        # Error path: slug didn't change, so the original detail URL is still
+        # valid. Send the admin back there with the error code.
+        if to_detail:
+            return RedirectResponse(
+                f"/admin/products/{slug}?error={err_code(e)}", status_code=303,
+            )
+        return RedirectResponse(
+            f"/admin/products?error={err_code(e)}", status_code=303,
+        )
+    if to_detail:
+        return RedirectResponse(
+            f"/admin/products/{p.slug}?product_edited=1", status_code=303,
+        )
     return RedirectResponse(
         f"/admin/products?product_edited={p.slug}", status_code=303,
     )
