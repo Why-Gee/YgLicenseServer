@@ -307,23 +307,28 @@ def test_create_collision_redirects_to_products_list(client: TestClient) -> None
 
 def test_update_product_clears_description(client: TestClient) -> None:
     """description="" clears the column to NULL and writes the diff."""
-    from app.services.errors import NotFound  # noqa: F401  (mirrors pattern elsewhere)
     _seed_product()
-    # First, give it a description so we have something to clear.
+    # Two sessions: set "hello", then clear with "".
+    # expunge_all() after the first commit forces the second session's query
+    # to re-read from the DB rather than returning a stale identity-map entry,
+    # which prevents a noop-detect false-negative under SQLite QueuePool.
     with db_mod.SessionLocal() as db:
         products_svc.update_product(db, "myapp", description="hello")
-    # Now clear it via the new "" semantic.
-    with db_mod.SessionLocal() as db:
+        db.expunge_all()
         products_svc.update_product(db, "myapp", description="")
+        db.expunge_all()
         p = db.query(Product).filter_by(slug="myapp").one()
         assert p.description is None
-        ev = (
+        # Assert both events exist; use created_at order which is reliable.
+        events = (
             db.query(Event)
             .filter_by(type="product:edited")
-            .order_by(Event.id.desc())
-            .first()
+            .order_by(Event.created_at.asc())
+            .all()
         )
-        assert ev.payload["changes"] == {"description": ["hello", None]}
+        changes = [ev.payload["changes"] for ev in events]
+        assert {"description": [None, "hello"]} in changes, f"set event missing: {changes}"
+        assert {"description": ["hello", None]} in changes, f"clear event missing: {changes}"
 
 
 def test_update_product_empty_description_on_null_is_noop(client: TestClient) -> None:
