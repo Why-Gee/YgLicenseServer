@@ -255,7 +255,7 @@
       <div id="lm-valid-until-wrap" style="display:none;"><label>Valid Until</label><input id="lm-valid-until" name="valid_until" type="datetime-local"></div>
       <div style="grid-column:1/-1;">
         <label>Features (JSON)</label>
-        <input id="lm-features" name="features_json" placeholder='{"chat_agent":true,"no_ads":false}'>
+        <input id="lm-features" name="features_json" placeholder='{"premium": true, "trial": false}'>
       </div>
       <div style="grid-column:1/-1;border-top:1px solid var(--bd);padding-top:.7em;margin-top:.3em;">
         <label style="margin-top:0;font-weight:600;color:var(--fg);">Webhook (Optional)</label>
@@ -551,7 +551,7 @@
       validUntilWrap.style.display = 'none';
       validUntilIn.removeAttribute('name');
       validUntilIn.removeAttribute('required');
-      featIn.value = '{"chat_agent": true}';
+      featIn.value = '';
       whIn.value = '';
       rotateRow.style.display = 'none';
       rotateCb.checked = false;
