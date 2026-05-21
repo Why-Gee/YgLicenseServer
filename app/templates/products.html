@@ -197,71 +197,33 @@
   var cancelBtn = document.getElementById('pm-cancel');
   var closeBtn = document.getElementById('pm-close');
 
-  var initialSnapshot = null;
-  function snapshot() {
-    return JSON.stringify({
-      slug: slugIn.value, name: nameIn.value, prefix: prefixIn.value,
-      issuer: issuerIn.value, desc: descIn.value,
-    });
-  }
-  function isDirty() {
-    return initialSnapshot !== null && snapshot() !== initialSnapshot;
-  }
-
   function close() {
     ov.style.display = 'none';
     document.removeEventListener('keydown', onKey);
-    initialSnapshot = null;
+    guard.clearSnapshot();
   }
-  function onKey(e) { if (e.key === 'Escape') attemptClose(); }
+  function onKey(e) { if (e.key === 'Escape') guard.attemptClose(); }
 
-  var dc = document.getElementById('pm-discard-confirm');
-  var dcCancel = document.getElementById('pmdc-cancel');
-  var dcDiscard = document.getElementById('pmdc-discard');
-  var dcSave = document.getElementById('pmdc-save');
-  var dcOpen = false;
-  function dirtyConfirm() {
-    return new Promise(function (resolve) {
-      dcOpen = true;
-      function done(verdict) {
-        dc.style.display = 'none';
-        dcOpen = false;
-        dcCancel.removeEventListener('click', onCancel);
-        dcDiscard.removeEventListener('click', onDiscard);
-        dcSave.removeEventListener('click', onSave);
-        document.removeEventListener('keydown', onDcKey);
-        resolve(verdict);
-      }
-      function onCancel()  { done('cancel'); }
-      function onDiscard() { done('discard'); }
-      function onSave()    { done('save'); }
-      function onDcKey(e) {
-        if (e.key === 'Escape') { e.stopPropagation(); done('cancel'); }
-        else if (e.key === 'Enter') { e.preventDefault(); done('save'); }
-      }
-      dcCancel.addEventListener('click', onCancel);
-      dcDiscard.addEventListener('click', onDiscard);
-      dcSave.addEventListener('click', onSave);
-      document.addEventListener('keydown', onDcKey);
-      dc.style.display = '';
-      dcCancel.focus();
-    });
-  }
+  var guard = window.makeDirtyGuard({
+    form: form,
+    snapshot: function () {
+      return JSON.stringify({
+        slug: slugIn.value, name: nameIn.value, prefix: prefixIn.value,
+        issuer: issuerIn.value, desc: descIn.value,
+      });
+    },
+    onClose: close,
+    discardConfirm: {
+      overlay: document.getElementById('pm-discard-confirm'),
+      cancelBtn: document.getElementById('pmdc-cancel'),
+      discardBtn: document.getElementById('pmdc-discard'),
+      saveBtn: document.getElementById('pmdc-save'),
+    },
+  });
 
-  async function attemptClose() {
-    if (dcOpen) return;
-    if (!isDirty()) { close(); return; }
-    var v = await dirtyConfirm();
-    if (v === 'cancel') return;
-    if (v === 'discard') { close(); return; }
-    if (v === 'save') {
-      if (form.reportValidity()) form.submit();
-    }
-  }
-
-  cancelBtn.addEventListener('click', attemptClose);
-  closeBtn.addEventListener('click', attemptClose);
-  ov.addEventListener('click', function (e) { if (e.target === ov) attemptClose(); });
+  cancelBtn.addEventListener('click', guard.attemptClose);
+  closeBtn.addEventListener('click', guard.attemptClose);
+  ov.addEventListener('click', function (e) { if (e.target === ov) guard.attemptClose(); });
 
   function open(mode, prod) {
     if (mode === 'edit') {
@@ -293,7 +255,7 @@
     }
     ov.style.display = '';
     document.addEventListener('keydown', onKey);
-    initialSnapshot = snapshot();
+    guard.takeSnapshot();
     setTimeout(function () {
       (mode === 'edit' ? nameIn : slugIn).focus();
     }, 50);
@@ -312,14 +274,7 @@
     });
   });
 
-  // Strip the success flash param on reload so the banner doesn't loop.
-  try {
-    var u = new URL(window.location.href);
-    if (u.searchParams.has('product_edited')) {
-      u.searchParams.delete('product_edited');
-      history.replaceState(null, '', u.pathname + (u.search ? u.search : '') + u.hash);
-    }
-  } catch (e) {}
+  // (Flash query-params are stripped centrally in admin.js.)
 })();
 </script>
 {% endblock %}

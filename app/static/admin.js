@@ -336,3 +336,123 @@ document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
     if (e.key === 'Escape') closeMobile();
   });
 })();
+
+// Modal dirty-guard helper. Encapsulates the "snapshot fields on open,
+// detect dirty close, show Save/Discard/Cancel sheet" state machine shared
+// between the product modal and license modal. The caller owns showing/
+// hiding the main modal overlay; this helper only manages the snapshot
+// tracker, the discard-confirm overlay, and the dispatch decision when
+// the caller invokes attemptClose() (from Escape, Cancel, ✕, or backdrop).
+//
+// Options:
+//   form           — the <form> element inside the modal. form.submit() is
+//                    only called from the "save while dirty" path.
+//   snapshot       — function returning a string representation of the
+//                    current field values (typically JSON.stringify of a
+//                    plain object). Compared by string equality.
+//   onClose        — function the helper calls to actually close the modal
+//                    (hide overlay, remove keydown listener, etc.).
+//   discardConfirm — { overlay, cancelBtn, discardBtn, saveBtn } — the
+//                    nested discard-confirm dialog elements.
+//   onBeforeSave   — (optional) function called immediately before
+//                    form.submit() in the dirty-then-save path. Use for
+//                    setting sessionStorage flags / etc.
+//
+// Returns:
+//   { takeSnapshot, clearSnapshot, attemptClose, isDirty }
+window.makeDirtyGuard = function (opts) {
+  var form = opts.form;
+  var dc = opts.discardConfirm.overlay;
+  var dcCancel = opts.discardConfirm.cancelBtn;
+  var dcDiscard = opts.discardConfirm.discardBtn;
+  var dcSave = opts.discardConfirm.saveBtn;
+  var initialSnapshot = null;
+  var dcOpen = false;
+
+  function isDirty() {
+    return initialSnapshot !== null && opts.snapshot() !== initialSnapshot;
+  }
+  function takeSnapshot() {
+    initialSnapshot = opts.snapshot();
+  }
+  function clearSnapshot() {
+    initialSnapshot = null;
+  }
+
+  function dirtyConfirm() {
+    return new Promise(function (resolve) {
+      dcOpen = true;
+      function done(verdict) {
+        dc.style.display = 'none';
+        dcOpen = false;
+        dcCancel.removeEventListener('click', onCancel);
+        dcDiscard.removeEventListener('click', onDiscard);
+        dcSave.removeEventListener('click', onSave);
+        document.removeEventListener('keydown', onDcKey);
+        resolve(verdict);
+      }
+      function onCancel()  { done('cancel'); }
+      function onDiscard() { done('discard'); }
+      function onSave()    { done('save'); }
+      function onDcKey(e) {
+        if (e.key === 'Escape') { e.stopPropagation(); done('cancel'); }
+        else if (e.key === 'Enter') { e.preventDefault(); done('save'); }
+      }
+      dcCancel.addEventListener('click', onCancel);
+      dcDiscard.addEventListener('click', onDiscard);
+      dcSave.addEventListener('click', onSave);
+      document.addEventListener('keydown', onDcKey);
+      dc.style.display = '';
+      dcCancel.focus();
+    });
+  }
+
+  async function attemptClose() {
+    if (dcOpen) return;
+    if (!isDirty()) { opts.onClose(); return; }
+    var v = await dirtyConfirm();
+    if (v === 'cancel') return;
+    if (v === 'discard') { opts.onClose(); return; }
+    if (v === 'save') {
+      if (form.reportValidity()) {
+        if (opts.onBeforeSave) opts.onBeforeSave();
+        form.submit();
+      }
+    }
+  }
+
+  return {
+    takeSnapshot: takeSnapshot,
+    clearSnapshot: clearSnapshot,
+    attemptClose: attemptClose,
+    isDirty: isDirty,
+  };
+};
+
+// Strip ephemeral flash query-params so a reload doesn't re-trigger banners
+// or auto-open modals. Server-rendered banners + JSON payloads already
+// captured these on the initial render; the URL just needs cleaning.
+(function () {
+  var FLASH_PARAMS = [
+    'error',
+    'product_edited',
+    'edited',
+    'issued',
+    'webhook_lid',
+    'webhook_test_lid',
+    'webhook_test_ok',
+    'webhook_test_status',
+    'deleted_products',
+    'deleted_licenses',
+  ];
+  try {
+    var u = new URL(window.location.href);
+    var stripped = false;
+    FLASH_PARAMS.forEach(function (k) {
+      if (u.searchParams.has(k)) { u.searchParams.delete(k); stripped = true; }
+    });
+    if (stripped) {
+      history.replaceState(null, '', u.pathname + (u.search ? u.search : '') + u.hash);
+    }
+  } catch (e) { /* URL not constructible; skip silently */ }
+})();
