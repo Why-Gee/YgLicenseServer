@@ -350,26 +350,6 @@
     }
   });
 
-  // Snapshot of form values right after open(). Compared on dismiss to
-  // detect unsaved changes. Captures the same fields the form submits.
-  var initialSnapshot = null;
-  function snapshot() {
-    return JSON.stringify({
-      email: emailIn.value,
-      customer_name: nameIn.value,
-      plan: planIn.value,
-      max_users: maxIn.value,
-      valid_days: validDaysIn.value,
-      valid_until: validUntilIn.value,
-      features_json: featIn.value,
-      webhook_url: whIn.value,
-      rotate_secret: rotateCb.checked,
-    });
-  }
-  function isDirty() {
-    return initialSnapshot !== null && snapshot() !== initialSnapshot;
-  }
-
   // ----- Issue-mode email lookup -----------------------------------------
   // When the admin types a new email, the name field is the initial set for
   // a brand-new customer. When the email belongs to an EXISTING customer,
@@ -438,63 +418,43 @@
   function close() {
     ov.style.display = 'none';
     document.removeEventListener('keydown', onKey);
-    initialSnapshot = null;
+    guard.clearSnapshot();
   }
-  function onKey(e) { if (e.key === 'Escape') attemptClose(); }
+  function onKey(e) { if (e.key === 'Escape') guard.attemptClose(); }
 
-  // 3-button confirm: cancel | discard | save. Higher z so it overlays the
-  // license modal. Shown only when isDirty() — clean dismisses skip it.
-  var dc = document.getElementById('discard-confirm');
-  var dcCancel = document.getElementById('dc-cancel');
-  var dcDiscard = document.getElementById('dc-discard');
-  var dcSave = document.getElementById('dc-save');
-  var dcOpen = false;
-  function dirtyConfirm() {
-    return new Promise(function (resolve) {
-      dcOpen = true;
-      function done(verdict) {
-        dc.style.display = 'none';
-        dcOpen = false;
-        dcCancel.removeEventListener('click', onCancel);
-        dcDiscard.removeEventListener('click', onDiscard);
-        dcSave.removeEventListener('click', onSave);
-        document.removeEventListener('keydown', onDcKey);
-        resolve(verdict);
-      }
-      function onCancel()  { done('cancel'); }
-      function onDiscard() { done('discard'); }
-      function onSave()    { done('save'); }
-      function onDcKey(e) {
-        if (e.key === 'Escape') { e.stopPropagation(); done('cancel'); }
-        else if (e.key === 'Enter') { e.preventDefault(); done('save'); }
-      }
-      dcCancel.addEventListener('click', onCancel);
-      dcDiscard.addEventListener('click', onDiscard);
-      dcSave.addEventListener('click', onSave);
-      document.addEventListener('keydown', onDcKey);
-      dc.style.display = '';
-      dcCancel.focus();
-    });
-  }
+  var guard = window.makeDirtyGuard({
+    form: form,
+    snapshot: function () {
+      return JSON.stringify({
+        email: emailIn.value,
+        customer_name: nameIn.value,
+        plan: planIn.value,
+        max_users: maxIn.value,
+        valid_days: validDaysIn.value,
+        valid_until: validUntilIn.value,
+        features_json: featIn.value,
+        webhook_url: whIn.value,
+        rotate_secret: rotateCb.checked,
+      });
+    },
+    onClose: close,
+    onBeforeSave: function () {
+      // Save-while-dirty implies close-after-submit; mirror the explicit
+      // Save button's behavior so the post-redirect auto-open suppression
+      // applies here too.
+      sessionStorage.setItem(CLOSE_FLAG, '1');
+    },
+    discardConfirm: {
+      overlay: document.getElementById('discard-confirm'),
+      cancelBtn: document.getElementById('dc-cancel'),
+      discardBtn: document.getElementById('dc-discard'),
+      saveBtn: document.getElementById('dc-save'),
+    },
+  });
 
-  async function attemptClose() {
-    if (dcOpen) return;             // already prompting; ignore second trigger
-    if (!isDirty()) { close(); return; }
-    var v = await dirtyConfirm();
-    if (v === 'cancel') return;
-    if (v === 'discard') { close(); return; }
-    if (v === 'save') {
-      if (form.reportValidity()) {
-        // User invoked dismiss + chose Save -- they want to close.
-        sessionStorage.setItem(CLOSE_FLAG, '1');
-        form.submit();
-      }
-    }
-  }
-
-  cancelBtn.addEventListener('click', attemptClose);
-  closeBtn.addEventListener('click', attemptClose);
-  ov.addEventListener('click', function (e) { if (e.target === ov) attemptClose(); });
+  cancelBtn.addEventListener('click', guard.attemptClose);
+  closeBtn.addEventListener('click', guard.attemptClose);
+  ov.addEventListener('click', function (e) { if (e.target === ov) guard.attemptClose(); });
 
   function open(mode, lic) {
     if (mode === 'edit') {
@@ -594,7 +554,7 @@
     document.addEventListener('keydown', onKey);
     // Snapshot AFTER all fields are populated so the "is dirty" comparison
     // measures user changes, not the create/edit pre-fill.
-    initialSnapshot = snapshot();
+    guard.takeSnapshot();
     setTimeout(function () {
       (mode === 'edit' ? planIn : emailIn).focus();
     }, 50);
