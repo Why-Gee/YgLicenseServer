@@ -623,15 +623,7 @@
   if (closeAfter !== '1' && data.auto_open_lid && byId[data.auto_open_lid]) {
     open('edit', byId[data.auto_open_lid]);
   }
-  // Strip flash params so a reload doesn't re-trigger auto-open or banners.
-  try {
-    var u = new URL(window.location.href);
-    var stripped = false;
-    ['edited', 'issued', 'webhook_lid', 'webhook_test_lid'].forEach(function (k) {
-      if (u.searchParams.has(k)) { u.searchParams.delete(k); stripped = true; }
-    });
-    if (stripped) history.replaceState(null, '', u.pathname + (u.search ? u.search : '') + u.hash);
-  } catch (e) {}
+  // (Flash query-params are stripped centrally in admin.js.)
 })();
 </script>
 {% endblock %}

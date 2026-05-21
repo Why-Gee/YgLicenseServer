@@ -312,14 +312,7 @@
     });
   });
 
-  // Strip the success flash param on reload so the banner doesn't loop.
-  try {
-    var u = new URL(window.location.href);
-    if (u.searchParams.has('product_edited')) {
-      u.searchParams.delete('product_edited');
-      history.replaceState(null, '', u.pathname + (u.search ? u.search : '') + u.hash);
-    }
-  } catch (e) {}
+  // (Flash query-params are stripped centrally in admin.js.)
 })();
 </script>
 {% endblock %}

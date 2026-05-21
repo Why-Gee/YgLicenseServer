@@ -336,3 +336,31 @@ document.querySelectorAll('[data-copy-from]').forEach(function (btn) {
     if (e.key === 'Escape') closeMobile();
   });
 })();
+
+// Strip ephemeral flash query-params so a reload doesn't re-trigger banners
+// or auto-open modals. Server-rendered banners + JSON payloads already
+// captured these on the initial render; the URL just needs cleaning.
+(function () {
+  var FLASH_PARAMS = [
+    'error',
+    'product_edited',
+    'edited',
+    'issued',
+    'webhook_lid',
+    'webhook_test_lid',
+    'webhook_test_ok',
+    'webhook_test_status',
+    'deleted_products',
+    'deleted_licenses',
+  ];
+  try {
+    var u = new URL(window.location.href);
+    var stripped = false;
+    FLASH_PARAMS.forEach(function (k) {
+      if (u.searchParams.has(k)) { u.searchParams.delete(k); stripped = true; }
+    });
+    if (stripped) {
+      history.replaceState(null, '', u.pathname + (u.search ? u.search : '') + u.hash);
+    }
+  } catch (e) { /* URL not constructible; skip silently */ }
+})();
