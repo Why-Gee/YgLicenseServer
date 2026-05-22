@@ -5,9 +5,12 @@ implemented (red-green-refactor).
 """
 from __future__ import annotations
 
+import csv
+import io
 from contextlib import contextmanager
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -112,3 +115,84 @@ def test_delete_product_fires_webhooks_without_crashing(client, monkeypatch):
             f"expected exactly one WebhookDelivery row for license.deleted, "
             f"got {len(deleted_rows)}: {[(d.id, d.event_type) for d in deliveries]}"
         )
+
+
+# ---------- Vuln 3: CSV injection ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "unsafe_value",
+    [
+        "=cmd|'/c calc'!A0",
+        "+1+1",
+        "-2+3",
+        "@SUM(1+1)",
+        "\t=danger",
+        "\rdanger",
+    ],
+)
+def test_customers_csv_neutralises_formula_chars(client, unsafe_value):
+    """Customer name/email starting with formula characters must be prefixed
+    with a single apostrophe so spreadsheets render them as literal text."""
+    _create_product(client)
+    # Issue a license with the dangerous name to seed a customer.
+    r = client.post(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+        json={
+            "email": "alice@example.com", "name": unsafe_value,
+            "plan": "standard", "valid_days": 30,
+        },
+    )
+    assert r.status_code == 200, r.text
+    r = client.get(
+        "/v1/admin/exports/customers.csv",
+        headers={"Authorization": "Bearer test-admin"},
+    )
+    assert r.status_code == 200
+    rows = list(csv.reader(io.StringIO(r.text)))
+    # Header + 1 row.
+    assert len(rows) >= 2
+    name_idx = rows[0].index("name")
+    name_cell = rows[1][name_idx]
+    # The service layer strips leading/trailing whitespace before storing, so
+    # \t/\r prefixes are removed upstream; the stored value may differ from
+    # unsafe_value. Two valid outcomes:
+    #   1. The stored value retained an unsafe prefix → cell must start with "'".
+    #   2. The stored value had the unsafe prefix stripped → cell is safe as-is.
+    # In neither case should a bare unsafe character appear as the first char.
+    if name_cell and name_cell[0] in ("=", "+", "-", "@", "\t", "\r"):
+        pytest.fail(f"unsanitised name cell in customers.csv: {name_cell!r}")
+    # If the guard fired (cell starts with "'"), verify the payload is intact.
+    if name_cell.startswith("'"):
+        payload = name_cell[1:]
+        # The payload must equal either the raw input or its stripped variant.
+        assert payload == unsafe_value or payload == unsafe_value.strip(), (
+            f"apostrophe-prefixed payload unexpected: {payload!r} for input {unsafe_value!r}"
+        )
+
+
+def test_events_csv_neutralises_formula_chars(client):
+    """Admin UI events.csv must apply the same guard."""
+    _create_product(client)
+    # Issue a license with a dangerous note — flows through the issued event.
+    cookies = _admin_login(client)
+    _ = _form_post(
+        client, "/admin/products/asm/licenses", cookies,
+        data={
+            "email": "bob@example.com",
+            "plan": "=evil",  # plan is admin-controlled, but exercises the path
+            "max_users": "10",
+            "valid_days": "30",
+            "features_json": "{}",
+        },
+        follow_redirects=False,
+    )
+    r = client.get("/admin/events.csv", cookies=cookies, follow_redirects=False)
+    assert r.status_code == 200
+    rows = list(csv.reader(io.StringIO(r.text)))
+    # find any cell starting with one of the unsafe chars (unprefixed)
+    for row in rows[1:]:
+        for cell in row:
+            if cell and cell[0] in ("=", "+", "-", "@", "\t", "\r"):
+                pytest.fail(f"unsanitised cell escaped into events.csv: {cell!r}")

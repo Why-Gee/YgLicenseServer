@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import Event
 from app.routers.admin_ui._deps import require_login, templates, utcnow
+from app.routers.exports import _csv_safe
 
 router = APIRouter()
 
@@ -35,12 +36,12 @@ def events_csv(request: Request, db: Session = Depends(get_db)) -> Response:
     for e in rows:
         payload = json.dumps(e.payload or {}, separators=(",", ":"))
         w.writerow([
-            e.created_at.strftime("%Y-%m-%d %H:%M:%S"),
-            e.type,
-            e.license_id or "",
-            e.product_id or "",
-            e.note or "",
-            payload,
+            _csv_safe(e.created_at.strftime("%Y-%m-%d %H:%M:%S")),
+            _csv_safe(e.type),
+            _csv_safe(e.license_id or ""),
+            _csv_safe(e.product_id or ""),
+            _csv_safe(e.note or ""),
+            _csv_safe(payload),
         ])
     filename = f"events-{utcnow().strftime('%Y%m%d-%H%M%S')}.csv"
     return Response(
