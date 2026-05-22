@@ -1,6 +1,6 @@
 [project]
 name = "yg-license-server"
-version = "0.16.4"
+version = "0.21.0"
 description = "Self-hostable multi-product license server. Issues signed JWTs, handles Stripe webhooks, ships with an admin UI."
 requires-python = ">=3.12"
 dependencies = [
