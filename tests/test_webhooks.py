@@ -4,9 +4,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import socket
 from contextlib import contextmanager
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -95,7 +97,37 @@ def _issue_via_ui(client: TestClient, *, webhook_url: str = "") -> str:
     assert r.status_code == 303, r.text
     # Pull the issued license id from the redirect URL.
     loc = r.headers["location"]
-    return loc.rsplit("issued=", 1)[1]
+    return loc.rsplit("issued=", 1)[1].split("&")[0]
+
+
+# ---------- DNS stub fixture -----------------------------------------------
+# resolve_safe_address resolves DNS once before building the pinned URL.
+# In tests the webhook hostnames are fictional (example.test / example.com
+# subdomains) and may not resolve, so we stub getaddrinfo to return a
+# routable public IP for any test hostname.  93.184.216.34 is example.com —
+# not in any private/reserved range per Python's ipaddress.
+
+_REAL_GETADDRINFO = socket.getaddrinfo
+_TEST_HOSTNAMES = ("example.test", "example.com")
+
+
+def _stub_getaddrinfo(host, port, *args, **kwargs):
+    if isinstance(host, str) and any(
+        host == h or host.endswith("." + h) for h in _TEST_HOSTNAMES
+    ):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", port or 0))]
+    return _REAL_GETADDRINFO(host, port, *args, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _patch_dns(monkeypatch):
+    """Ensure test webhook hostnames resolve to a public IP so
+    resolve_safe_address doesn't refuse delivery."""
+    # Per-test override: tests that need a different resolution (e.g. a DNS
+    # failure case) can call monkeypatch.setattr(socket, "getaddrinfo", ...)
+    # inside the test; the autouse fixture installs the default, the per-
+    # test setattr replaces it for that test.
+    monkeypatch.setattr(socket, "getaddrinfo", _stub_getaddrinfo)
 
 
 # ---------- pure crypto ---------------------------------------------------
@@ -129,7 +161,10 @@ def test_status_change_fires_webhook(client: TestClient, monkeypatch) -> None:
 
     assert len(sent) == 1
     msg = sent[0]
-    assert msg["url"] == "https://example.test/webhook"
+    # After DNS-pinning, the URL host is the resolved IP; the original hostname
+    # is preserved in the Host header for virtual-hosting / TLS SNI.
+    assert "93.184.216.34" in msg["url"], f"expected pinned IP in url, got: {msg['url']}"
+    assert msg["headers"].get("host") == "example.test", msg["headers"]
     assert msg["headers"]["x-license-server-event"] == "license.status.changed"
     assert "x-license-server-signature" in msg["headers"]
     assert "x-license-server-event-id" in msg["headers"]
@@ -194,7 +229,7 @@ def test_bulk_delete_is_atomic_and_fires_one_webhook_per_license(
             data=form, cookies=cookies, follow_redirects=False,
         )
         assert r.status_code == 303
-        lids.append(r.headers["location"].rsplit("issued=", 1)[1])
+        lids.append(r.headers["location"].rsplit("issued=", 1)[1].split("&")[0])
 
     # Bulk-delete all three. httpx encodes a dict with a list value as
     # repeated form fields (license_ids=...&license_ids=...&...).

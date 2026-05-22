@@ -113,6 +113,10 @@ class License(Base):
             f"status IN {LICENSE_STATUSES!r}",
             name="ck_licenses_status",
         ),
+        CheckConstraint(
+            "webhook_url_source IN ('admin','self')",
+            name="ck_licenses_webhook_url_source",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -133,6 +137,29 @@ class License(Base):
     # the customer react to admin actions instantly instead of polling.
     webhook_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     webhook_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Provenance of webhook_url: 'admin' = set via admin UI / JSON API (locked
+    # against /v1/check overrides); 'self' = set by the license holder via
+    # /v1/check public_url (freely updatable). Enforced by
+    # ck_licenses_webhook_url_source. Default 'self' so un-migrated rows and
+    # new licenses without a URL start in the self-register-allowed state.
+    webhook_url_source: Mapped[str] = mapped_column(
+        String(16), default="self", nullable=False,
+    )
+    # Per-license http:// opt-in. When True, webhook URLs may use the http
+    # scheme (intended for customer-LAN installs). Default False; HTTPS-only
+    # is the safe default. Migration backfills True for existing rows whose
+    # webhook_url already starts with http:// so behaviour doesn't regress.
+    allow_http_webhook: Mapped[bool] = mapped_column(
+        Integer, default=0, nullable=False,
+    )
+
+    # v1.0+: BLAKE2b-keyed hash of the plaintext key. /v1/check looks up
+    # licenses by this column, not by the plaintext. The plaintext column
+    # is retained for one release (deprecated) so an in-place migration
+    # rollback is possible; drop in v1.1.
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    # Truncated prefix+tail safe to show anywhere. `<prefix>_<first6>…<last4>`.
+    key_display: Mapped[str] = mapped_column(String(32), nullable=False)
 
     product: Mapped[Product] = relationship(back_populates="licenses")
     customer: Mapped[Customer] = relationship(back_populates="licenses")
@@ -272,3 +299,29 @@ class ProcessedStripeEvent(Base):
     )
     type: Mapped[str] = mapped_column(String(64))
     processed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive, index=True)
+
+
+class AdminMfa(Base):
+    """Single-row table for the (single-operator) admin MFA state.
+
+    `id == 1` is enforced by a CheckConstraint — we never want a second
+    row, since "the admin" is one logical principal in this deployment
+    shape. Multi-operator setups would graduate to a per-user table.
+    """
+
+    __tablename__ = "admin_mfa"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_admin_mfa_single_row"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Integer, default=0, nullable=False)
+    # Fernet-encrypted TOTP base32 secret. Stored encrypted because anyone
+    # with the secret can forge OTPs.
+    secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # JSON list of single-use recovery-code SHA-256 hex digests. When a code
+    # is redeemed it's removed from the list (re-saved). Fernet-wrapping the
+    # list itself is overkill given each entry is already a one-way hash.
+    recovery_codes_hashed: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

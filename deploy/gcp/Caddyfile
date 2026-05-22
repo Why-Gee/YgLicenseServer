@@ -1,10 +1,33 @@
 {
     email ${ADMIN_EMAIL}
+    servers {
+        # Caddy only honors X-Forwarded-For / Forwarded from these source
+        # ranges. private_ranges covers RFC1918 + loopback + link-local +
+        # IPv6 ULA, which is exactly our deploy: clients hit Caddy, Caddy
+        # connects to uvicorn over loopback. Spoofed XFF from real clients
+        # is stripped before it reaches the upstream — belt-and-braces
+        # alongside the in-app drop in v0.22 (H1).
+        trusted_proxies static private_ranges
+    }
 }
 
 ${LICENSE_HOST} {
     encode zstd gzip
+
+    # Security headers on every response. The app serves HTTPS-only via
+    # Let's Encrypt; HSTS pins that posture in the browser for two years
+    # even if the cert later goes self-signed.
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        # Hide the Caddy version banner.
+        -Server
+    }
+
     reverse_proxy 127.0.0.1:8800
+
     log {
         output file /var/log/caddy/access.log {
             roll_size 50mb

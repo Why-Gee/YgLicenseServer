@@ -33,6 +33,7 @@ def license_issue(
     valid_days: int = Form(365),
     features_json: str = Form("{}"),
     webhook_url: str = Form(""),
+    allow_http_webhook: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ) -> Response:
@@ -56,14 +57,19 @@ def license_issue(
             plan=plan, max_users=max_users, valid_days=valid_days,
             features=features,
             webhook_url=webhook_url or None,
+            allow_http_webhook=(allow_http_webhook == "1"),
             note="ui/issue",
         )
     except Unsafe as e:
         return RedirectResponse(
             f"/admin/products/{slug}?error={err_code(e)}", status_code=303
         )
+    # Plaintext appears in this query string for ~1 request; acceptable
+    # trade-off for the single-op deployment shape — admin owns their access logs.
+    from urllib.parse import quote
     return RedirectResponse(
-        f"/admin/products/{slug}?issued={result.license.id}", status_code=303
+        f"/admin/products/{slug}?issued={result.license.id}&key={quote(result.license.key)}",
+        status_code=303,
     )
 
 
@@ -77,6 +83,7 @@ def license_edit(
     valid_until: str = Form(...),
     features_json: str = Form("{}"),
     webhook_url: str = Form(""),
+    allow_http_webhook: str = Form(""),
     rotate_secret: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
@@ -98,6 +105,7 @@ def license_edit(
             plan=plan, max_users=max_users, valid_until_raw=valid_until,
             features_json=features_json,
             webhook_url=webhook_url,
+            allow_http_webhook=(allow_http_webhook == "1") if allow_http_webhook else None,
             rotate_secret=rotate_secret == "1",
             note="ui/edit",
             schedule=bg.add_task,
@@ -119,6 +127,7 @@ def license_webhook_update(
     lid: str,
     request: Request,
     webhook_url: str = Form(""),
+    allow_http_webhook: str = Form(""),
     rotate_secret: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
@@ -134,7 +143,9 @@ def license_webhook_update(
     try:
         licenses_svc.configure_webhook(
             db, lic, url=new_url, rotate=rotate_secret == "1",
-            mint_on_url_change=True, note="ui/webhook",
+            mint_on_url_change=True,
+            allow_http=(allow_http_webhook == "1"),
+            note="ui/webhook",
         )
     except Unsafe as e:
         return RedirectResponse(
@@ -155,6 +166,10 @@ def license_webhook_update(
 class _WebhookConfigIn(BaseModel):
     url: str  # required; empty string clears (delete url + secret)
     rotate: bool = False
+    # Optional per-license http:// opt-in. None = preserve existing flag;
+    # True = allow http:// on this license; False = revoke. Matches the
+    # admin-UI checkbox semantics on the form-driven webhook endpoint.
+    allow_http: bool | None = None
 
 
 class _WebhookConfigOut(BaseModel):
@@ -189,7 +204,9 @@ def admin_api_webhook_set(
     try:
         licenses_svc.configure_webhook(
             db, lic, url=new_url, rotate=body.rotate,
-            mint_on_url_change=False, note="api/webhook",
+            mint_on_url_change=False,
+            allow_http=body.allow_http,
+            note="api/webhook",
             payload_extra={"rotated": body.rotate},
         )
     except Unsafe as e:

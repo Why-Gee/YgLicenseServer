@@ -61,33 +61,22 @@ class CheckOut(BaseModel):
     max_users: int
     license_id: str
     product: str
-    # HMAC signing key for inbound webhooks. Auto-minted on first /v1/check
-    # if absent so the receiver always has something to verify with.
-    webhook_secret: str
+    # Only present when the URL is self-registered (source='self'); admin-set
+    # URLs do not expose the secret over /v1/check.
+    webhook_secret: str | None = None
 
 
 def _client_ip_hash(request: Request) -> str | None:
-    """SHA256 of the originating IP. Reads X-Forwarded-For when the request
-    came through a trusted proxy (Caddy in our deploy), falling back to the
-    direct socket peer.
-
-    Trust model: we only honor X-Forwarded-For when the immediate peer
-    (request.client.host) is loopback. In our deploy Caddy listens on
-    127.0.0.1 only -- anything from off-box hits Caddy first, gets the
-    XFF header, and reaches us via loopback. Direct hits (impossible in
-    prod) would expose the socket peer.
-    """
+    """SHA-256 of the immediate-peer IP. We never trust client-supplied
+    X-Forwarded-For: Caddy *appends* XFF, so its leftmost entry is whatever
+    the client sent — strictly worse than the socket peer. In our deploy
+    Caddy is on 127.0.0.1, so request.client.host is the last-hop value
+    set by the proxy; trust that and only that. Behind a multi-hop CDN a
+    future reader will need to be added that explicitly trusts only the
+    rightmost N entries from a configured proxy chain."""
     if request.client is None:
         return None
-    peer = request.client.host
-    src = peer
-    if peer in ("127.0.0.1", "::1") and "x-forwarded-for" in request.headers:
-        # XFF is comma-separated; LEFTMOST entry is the original client.
-        xff = request.headers["x-forwarded-for"]
-        first = next((p.strip() for p in xff.split(",") if p.strip()), None)
-        if first:
-            src = first
-    return hashlib.sha256(src.encode()).hexdigest()
+    return hashlib.sha256(request.client.host.encode()).hexdigest()
 
 
 @router.post("/v1/check", response_model=CheckOut)
@@ -112,7 +101,9 @@ def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> Che
         max_users=lic.max_users,
         license_id=lic.id,
         product=lic.product.slug,
-        webhook_secret=lic.webhook_secret,
+        webhook_secret=(
+            lic.webhook_secret if lic.webhook_url_source == "self" else None
+        ),
     )
 
 
@@ -225,6 +216,8 @@ class IssueIn(BaseModel):
     max_users: int = 10
     features: dict = {}
     valid_days: int = 365
+    webhook_url: str | None = None
+    allow_http_webhook: bool = False
     stripe_customer_id: str | None = None
 
 
@@ -250,6 +243,8 @@ def admin_issue(slug: str, body: IssueIn, db: Session = Depends(get_db)) -> Issu
         email=body.email, name=body.name,
         plan=body.plan, max_users=body.max_users,
         valid_days=body.valid_days, features=body.features,
+        webhook_url=body.webhook_url,
+        allow_http_webhook=body.allow_http_webhook,
         stripe_customer_id=body.stripe_customer_id,
         note="admin/issue",
         send_email=True,
@@ -288,11 +283,14 @@ def admin_list_licenses(
     return {
         "items": [
             {
-                "id": r.id, "key": r.key, "plan": r.plan, "status": r.status,
+                "id": r.id, "key": r.key_display, "plan": r.plan, "status": r.status,
                 "max_users": r.max_users, "features": r.features,
                 "valid_until": r.valid_until.isoformat(),
                 "customer": r.customer.email, "customer_name": r.customer.name,
                 "created_at": r.created_at.isoformat(),
+                "webhook_url": r.webhook_url,
+                "webhook_url_source": r.webhook_url_source,
+                "allow_http_webhook": bool(r.allow_http_webhook),
             }
             for r in page.items
         ],

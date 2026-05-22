@@ -144,7 +144,7 @@ def test_edit_form_ignores_customer_name_field(client: TestClient) -> None:
         ),
         cookies=cookies, follow_redirects=False,
     )
-    lid = r.headers["location"].rsplit("issued=", 1)[1]
+    lid = r.headers["location"].rsplit("issued=", 1)[1].split("&")[0]
 
     import app.db as db_mod
     from app.models import License

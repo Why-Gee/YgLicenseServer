@@ -9,6 +9,7 @@ from app.routers.admin_ui import (
     dashboard,
     events,
     licenses,
+    mfa,
     products,
     webhook_deliveries,
 )
@@ -22,6 +23,7 @@ ALL_ROUTERS = [
     customers.router,
     events.router,
     webhook_deliveries.router,
+    mfa.router,
 ]
 
 # Re-export the LoginRequired exception so app.main can register its handler.

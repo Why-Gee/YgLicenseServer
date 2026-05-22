@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app import webhooks
 from app._time import utcnow as _utcnow
+from app.license_keys import hash_key
 from app.models import Event, Install, License
 from app.security import is_safe_url_shape
 from app.services.errors import ServiceError
@@ -43,7 +44,7 @@ def check_license(
     """Validate a license + record a heartbeat. Caller passes in the hashed
     client IP (router computes it from request headers — kept out of services
     to keep them framework-free)."""
-    lic = db.query(License).filter_by(key=key).one_or_none()
+    lic = db.query(License).filter_by(key_hash=hash_key(key)).one_or_none()
     if lic is None:
         raise CheckRejected("invalid_key")
     if lic.status == "revoked":
@@ -57,9 +58,24 @@ def check_license(
     # only when changed so we don't churn the row on every heartbeat.
     if public_url is not None and public_url.strip():
         candidate = public_url.strip().rstrip("/")
-        if len(candidate) > 500 or not is_safe_url_shape(candidate, allow_http=True):
+        if len(candidate) > 500 or not is_safe_url_shape(
+            candidate, allow_http=bool(lic.allow_http_webhook),
+        ):
             raise CheckRejected("invalid_public_url", http_status=400)
         if lic.webhook_url != candidate:
+            # Admin-managed URLs are locked against /v1/check overrides.
+            if lic.webhook_url_source == "admin":
+                log.warning(
+                    "license %s refused public_url override of admin-set URL", lic.id,
+                )
+                db.add(Event(
+                    license_id=lic.id, product_id=lic.product_id,
+                    type="webhook:override_refused",
+                    payload={"attempted_url": candidate, "kept_url": lic.webhook_url},
+                    note="service/check",
+                ))
+                db.commit()
+                raise CheckRejected("webhook_url_locked", http_status=409)
             log.info("license %s webhook_url updated to %s", lic.id, candidate)
             db.add(Event(
                 license_id=lic.id, product_id=lic.product_id,
@@ -72,11 +88,12 @@ def check_license(
                 note="service/check",
             ))
             lic.webhook_url = candidate
-
-    # Lazy-mint webhook_secret. Receivers need it to verify inbound pushes,
-    # self-registering installs can't bootstrap one any other way.
-    if not lic.webhook_secret:
-        lic.webhook_secret = webhooks.generate_secret()
+            lic.webhook_url_source = "self"
+            # First time the customer self-registers → mint a secret so the
+            # response can carry it. Re-self-registration of the same URL
+            # leaves the existing secret in place.
+            if not lic.webhook_secret:
+                lic.webhook_secret = webhooks.generate_secret()
 
     install = (
         db.query(Install)

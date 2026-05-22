@@ -46,6 +46,16 @@ def sign_license_jwt(
     cap = min(now + timedelta(days=s.jwt_ttl_days), vu)
     payload = {
         "iss": product.jwt_issuer,
+        # opaque per-product id (UUID); survives slug rename, future-proofs key
+        # rotation. Carried as a payload claim (not the JWS header) -- pyjwt
+        # and most libraries ignore unknown payload claims, so adding it does
+        # not break existing clients.
+        "kid": product.id,
+        # v1.0+ breaking change: aud = product.slug. pyjwt validates aud
+        # whenever it is present, so clients MUST pass audience=product_slug
+        # to jwt.decode (or options={"verify_aud": False}) or they will
+        # receive InvalidAudienceError. Was deliberately omitted in v0.22.
+        "aud": product.slug,
         "iat": int(now.timestamp()),
         "exp": int(cap.timestamp()),
         "product": product.slug,

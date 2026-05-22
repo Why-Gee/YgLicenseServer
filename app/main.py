@@ -78,6 +78,29 @@ def _validate_secrets_at_boot() -> None:
             "stored as plaintext PEM in the DB. Generate with "
             "`python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`"
         )
+    if s.require_kek and not s.key_encryption_key:
+        log.critical(
+            "LICENSE_SERVER_REQUIRE_KEK=1 set but LICENSE_KEY_ENCRYPTION_KEY is "
+            "unset. Refusing to boot in plaintext-write mode. Generate a KEK "
+            "with `python -c 'from cryptography.fernet import Fernet; print("
+            "Fernet.generate_key().decode())'` and set it in the env."
+        )
+        sys.exit(78)  # EX_CONFIG
+    if s.require_kek and not s.license_key_pepper:
+        log.critical(
+            "LICENSE_SERVER_REQUIRE_KEK=1 set but LICENSE_KEY_PEPPER is "
+            "unset. Refusing to boot — without a pepper, key_hash lookups "
+            "are unkeyed and a DB dump trivially recovers all license "
+            "keys. Generate one with `python -c 'import secrets; "
+            "print(secrets.token_hex(32))'` and set it in the env."
+        )
+        sys.exit(78)
+    if not s.license_key_pepper and not s.require_kek:
+        log.warning(
+            "LICENSE_KEY_PEPPER is unset; /v1/check and license issuance "
+            "will raise RuntimeError until you configure one. Generate a "
+            "pepper with `python -c 'import secrets; print(secrets.token_hex(32))'`."
+        )
     # Production deploys that ship real customer emails must NOT use the
     # Resend public test sender (`onboarding@resend.dev`). Resend's
     # documentation is explicit that mail from that address is for

@@ -7,13 +7,19 @@ Defensive primitives that should not live in any single route handler:
   public_url AND for admin-supplied webhook URLs)
 - CSRF token derived deterministically from the admin session cookie
 
-Two-tier SSRF model:
-- `is_safe_url_shape()` is cheap, no DNS. Used at ingestion time to reject
+Three-tier SSRF model:
+- `is_safe_url_shape()` — cheap, no DNS. Ingestion-time gate that rejects
   obvious literal-IP / *.local / non-http(s) URLs. Doesn't catch a public-DNS
   hostname that resolves privately — that's the next layer's job.
-- `is_safe_for_delivery()` does DNS resolution and rejects URLs whose A/AAAA
-  records point at any private/loopback/link-local/multicast addr. Run this
-  immediately before every outbound HTTP request.
+- `resolve_safe_address()` — delivery-time, authoritative outbound guard.
+  Resolves the hostname once, refuses if any resolved address is private, and
+  returns the literal IP so the caller can pin the connection (no re-resolve
+  at connect time). This is the function called right before every webhook
+  delivery; it closes the DNS-rebinding TOCTOU that a simple DNS check leaves
+  open.
+- `is_safe_for_delivery()` — legacy diagnostic helper. Retained for boot-time
+  URL validation (config self-check) and troubleshooting. No longer called
+  from the delivery path; `resolve_safe_address` supersedes it there.
 """
 from __future__ import annotations
 
@@ -112,7 +118,7 @@ def is_safe_url_shape(url: str, *, allow_http: bool = False) -> bool:
     - bare "localhost"
 
     Returns True for any public-DNS-looking hostname, even if it doesn't
-    resolve yet. The delivery-time check (is_safe_for_delivery) is what
+    resolve yet. The delivery-time check (resolve_safe_address) is what
     actually enforces "the resolved IP is public" at the point of use.
     """
     try:
@@ -137,8 +143,65 @@ def is_safe_url_shape(url: str, *, allow_http: bool = False) -> bool:
         return not _ip_is_private(host)
 
 
+def resolve_safe_address(
+    url: str, *, allow_http: bool = False,
+) -> tuple[str, int, str, str] | None:
+    """DNS-pinned SSRF guard for outbound HTTP.
+
+    Returns a tuple (resolved_ip, port, scheme, original_hostname) the caller
+    should use to rewrite the request URL to the literal IP, while setting
+    `Host: <original_hostname>` and TLS SNI to the same. This closes the
+    TOCTOU window that `is_safe_for_delivery` leaves open: that function
+    resolves DNS, then httpx re-resolves at connect time, so an attacker
+    with a low-TTL authoritative server can return a public IP first and an
+    internal IP second.
+
+    Returns None when:
+      - the URL fails the cheap shape check (`is_safe_url_shape`)
+      - DNS resolution fails
+      - every resolved address is private/loopback/link-local/multicast
+    """
+    if not is_safe_url_shape(url, allow_http=allow_http):
+        log.warning("resolve_safe_address refused %s: unsafe_url_shape", url)
+        return None
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if not host:
+        log.warning("resolve_safe_address refused %s: unsafe_url_shape", url)
+        return None
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    # Literal IPs short-circuit DNS but still get the private-range check.
+    try:
+        ipaddress.ip_address(host)
+        if _ip_is_private(host):
+            log.warning("resolve_safe_address refused %s: all_private", url)
+            return None
+        return host, port, parts.scheme, host
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        log.warning(
+            "resolve_safe_address refused %s: dns_failed (%s: %s)",
+            url, type(exc).__name__, exc,
+        )
+        return None
+    for _fam, _t, _p, _c, sockaddr in infos:
+        addr = sockaddr[0]
+        if not _ip_is_private(addr):
+            return addr, port, parts.scheme, host
+    log.warning("resolve_safe_address refused %s: all_private", url)
+    return None
+
+
 def is_safe_for_delivery(url: str, *, allow_http: bool = False) -> tuple[bool, str | None]:
-    """Authoritative SSRF check used right before an outbound request.
+    """Legacy diagnostic helper — NOT called from the delivery path.
+
+    Retained for boot-time URL validation (config self-check) and
+    troubleshooting. `resolve_safe_address` is the authoritative outbound
+    guard: it resolves once, refuses private addresses, and returns the
+    literal IP so the caller can pin the connection.
 
     Runs is_safe_url_shape() PLUS DNS resolution of the hostname. If any
     resolved A/AAAA address is private/loopback/link-local/multicast, the

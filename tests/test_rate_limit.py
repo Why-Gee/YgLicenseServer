@@ -3,11 +3,12 @@
 T1-B: /v1/check capped at 60/min per IP; /admin/login capped at 10/min per
 IP. Both should respond 429 once the bucket is empty.
 
-slowapi keys on `app.rate_limit.client_ip`, which trusts X-Forwarded-For
-ONLY when the immediate peer is loopback (Caddy on 127.0.0.1 in prod). The
-TestClient peer is `testclient`, not loopback, so by default every test
-hits the same bucket regardless of what XFF says -- which is exactly what
-we want for "ten requests in a row from one client" coverage.
+slowapi keys on `app.rate_limit.client_ip`, which since v0.22 returns
+`request.client.host` unconditionally — no X-Forwarded-For parsing
+(Caddy appends rather than overwrites, so the leftmost XFF entry was
+attacker-controlled). The TestClient peer is `testclient`, so every
+test in this file shares one bucket — exactly what we want for "ten
+requests in a row from one client" coverage.
 """
 from __future__ import annotations
 

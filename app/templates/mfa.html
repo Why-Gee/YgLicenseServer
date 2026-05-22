@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}MFA{% endblock %}
+{% block topbar_title %}Multi-Factor Authentication{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0;">Admin MFA</h2>
+
+  {% if enabled %}
+    <p>Status: <span class="badge active">Enabled</span></p>
+    <p class="muted">An attacker with the admin token still has to provide a TOTP code on every login. Keep your recovery codes in a password manager.</p>
+    <h3>Regenerate Recovery Codes</h3>
+    <form id="regen-form">
+      {{ csrf_input(request) }}
+      <label>Current OTP code</label>
+      <input name="code" required autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}">
+      <button type="submit" class="btn">Generate new codes</button>
+    </form>
+    <h3 style="margin-top:1.5em;">Disable MFA</h3>
+    <form id="disable-form">
+      {{ csrf_input(request) }}
+      <label>OTP code or recovery code</label>
+      <input name="code" required autocomplete="one-time-code">
+      <button type="submit" class="btn danger">Disable</button>
+    </form>
+  {% else %}
+    <p>Status: <span class="badge revoked">Not enabled</span></p>
+    <p class="muted">Adding TOTP MFA means an attacker with the admin token still has to provide a one-time code on every login. Use an authenticator app (Google Authenticator, Authy, 1Password, etc.).</p>
+    <button type="button" id="start-enrol" class="btn">Start enrolment</button>
+    <div id="enrol-step" style="display:none;margin-top:1em;">
+      <p>Scan this URI with your authenticator app:</p>
+      <pre id="prov-uri" style="word-break:break-all;"></pre>
+      <p class="muted">Or enter this secret manually: <code id="secret"></code></p>
+      <form id="verify-form" style="margin-top:1em;">
+        {{ csrf_input(request) }}
+        <label>Enter the 6-digit code from your app</label>
+        <input name="code" required autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}">
+        <button type="submit" class="btn">Verify + enable</button>
+      </form>
+    </div>
+    <div id="codes-step" style="display:none;margin-top:1em;">
+      <h3>Recovery codes</h3>
+      <p class="muted">Save these somewhere safe. Each can be used once if you lose your authenticator.</p>
+      <pre id="codes"></pre>
+    </div>
+  {% endif %}
+</div>
+<script>
+(function () {
+  async function postForm(url, formEl) {
+    const fd = new FormData(formEl);
+    const r = await fetch(url, { method: 'POST', body: fd, credentials: 'same-origin' });
+    return [r.status, await r.json()];
+  }
+  const start = document.getElementById('start-enrol');
+  if (start) start.addEventListener('click', async () => {
+    const fd = new FormData();
+    fd.append('csrf_token', document.querySelector('input[name=csrf_token]').value);
+    const r = await fetch('/admin/mfa/enroll', { method: 'POST', body: fd, credentials: 'same-origin' });
+    const d = await r.json();
+    document.getElementById('prov-uri').textContent = d.provisioning_uri;
+    document.getElementById('secret').textContent = d.secret;
+    document.getElementById('enrol-step').style.display = '';
+  });
+  const verify = document.getElementById('verify-form');
+  if (verify) verify.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const [status, d] = await postForm('/admin/mfa/verify-enroll', verify);
+    if (status === 200) {
+      document.getElementById('codes').textContent = d.recovery_codes.join('\n');
+      document.getElementById('codes-step').style.display = '';
+      verify.style.display = 'none';
+    } else {
+      alert(d.error || 'Verification failed');
+    }
+  });
+  const disable = document.getElementById('disable-form');
+  if (disable) disable.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const [status, d] = await postForm('/admin/mfa/disable', disable);
+    if (status === 200) location.reload();
+    else alert(d.error || 'Disable failed');
+  });
+  const regen = document.getElementById('regen-form');
+  if (regen) regen.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const [status, d] = await postForm('/admin/mfa/regen-recovery', regen);
+    if (status === 200) {
+      alert('New recovery codes:\n\n' + d.recovery_codes.join('\n'));
+    } else alert(d.error || 'Regen failed');
+  });
+})();
+</script>
+{% endblock %}

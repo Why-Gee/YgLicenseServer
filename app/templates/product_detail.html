@@ -3,8 +3,12 @@
 {% block topbar_title %}<a href="/admin/products">← Products</a>{{ product.name }} <code>{{ product.slug }}</code>{% endblock %}
 {% block content %}
 
-{% if request.query_params.get('issued') %}
-<div class="success">license issued. find the key in the table below — copy it now (we don't show it again in plain text). if a webhook URL was set, the signing secret is shown in the edit modal and is also only displayed once.</div>
+{% if request.query_params.get('issued') and request.query_params.get('key') %}
+<div class="success" style="word-break:break-all;">
+  <p>license issued. <strong>copy this key now — it is not shown again:</strong></p>
+  <pre style="margin:.5em 0;background:rgba(0,0,0,.2);padding:.5em;border-radius:4px;">{{ request.query_params.get('key') }}</pre>
+  <p>after this page reload, the listing shows only a truncated <code>{{ '<prefix>_<first6>…<last4>' }}</code> form. if a webhook URL was set, the signing secret is shown in the edit modal and is also only displayed once.</p>
+</div>
 {% endif %}
 {% if request.query_params.get('edited') %}
 <div class="success">license updated.</div>
@@ -111,7 +115,7 @@
       {% for lic in licenses %}
         <tr>
           <td><input type="checkbox" name="license_ids" value="{{ lic.id }}"></td>
-          <td><code style="font-size:.85em;">{{ lic.key }}</code></td>
+          <td><code style="font-size:.85em;">{{ lic.key_display }}</code></td>
           <td data-sort-value="{{ (lic.customer.name or '')|lower }}">{% if lic.customer.name %}{{ lic.customer.name }}{% else %}<span class="muted">—</span>{% endif %}</td>
           <td>{{ lic.customer.email }}</td>
           <td>{{ lic.plan }}</td>
@@ -185,7 +189,7 @@
     {% for lic in licenses %}
     {
       "id": "{{ lic.id }}",
-      "key": {{ lic.key|tojson }},
+      "key_display": {{ lic.key_display|tojson }},
       "email": {{ lic.customer.email|tojson }},
       "customer_name": {{ (lic.customer.name or '')|tojson }},
       "plan": {{ lic.plan|tojson }},
@@ -194,7 +198,8 @@
       "features_json": {{ (lic.features|tojson)|tojson }},
       "status": {{ lic.status|tojson }},
       "webhook_url": {{ (lic.webhook_url or '')|tojson }},
-      "webhook_secret": {{ (lic.webhook_secret or '')|tojson }}
+      "webhook_secret": {{ (lic.webhook_secret or '')|tojson }},
+      "allow_http_webhook": {{ 1 if lic.allow_http_webhook else 0 }}
     }{% if not loop.last %},{% endif %}
     {% endfor %}
   ]
@@ -215,7 +220,7 @@
        otherwise drop the banner on the background page hidden under the
        overlay. Render here too so the admin sees the result inside the dialog. #}
     {% if request.query_params.get('issued') %}
-    <div class="success" style="margin-top:0;">license issued. copy the key from the table — we don't show it again in plain text. if a webhook URL was set, the signing secret is shown below.</div>
+    <div class="success" style="margin-top:0;">license issued. the plaintext key is shown in the banner above — copy it now. if a webhook URL was set, the signing secret is shown below.</div>
     {% endif %}
     {% if request.query_params.get('edited') %}
     <div class="success" style="margin-top:0;">license updated.</div>
@@ -275,6 +280,17 @@
                   title="POST a synthetic license.test event to the saved URL using the persisted signing secret">Test</button>
         </div>
         <small id="lm-update-hint" class="muted" style="display:none;margin-top:.3em;">Update saves only the webhook URL + (re)generates the signing secret. Other field edits are not saved by Update — use Save Changes for that. Test uses the currently-saved URL + secret.</small>
+      </div>
+      <div id="lm-allow-http-row" style="grid-column:1/-1;display:none;">
+        <label style="display:inline-flex;align-items:center;gap:.4em;font-weight:normal;">
+          <input id="lm-allow-http" name="allow_http_webhook" type="checkbox" value="1"
+                 style="width:auto;margin:0;">
+          Allow plain http:// (LAN install only)
+        </label>
+        <small class="muted" style="display:block;margin-top:.2em;">
+          HTTPS is required by default. Tick only for customer-LAN installs
+          that can't get a TLS cert — webhook bodies will travel in cleartext.
+        </small>
       </div>
       <div id="lm-rotate-row" style="display:none;grid-column:1/-1;">
         <label style="display:inline-flex;align-items:center;gap:.4em;font-weight:normal;">
@@ -339,6 +355,8 @@
   var validUntilIn = document.getElementById('lm-valid-until');
   var featIn = document.getElementById('lm-features');
   var whIn = document.getElementById('lm-webhook-url');
+  var allowHttpRow = document.getElementById('lm-allow-http-row');
+  var allowHttpCb = document.getElementById('lm-allow-http');
   var rotateRow = document.getElementById('lm-rotate-row');
   var rotateCb = document.getElementById('lm-rotate');
   var secretRow = document.getElementById('lm-secret-row');
@@ -453,6 +471,7 @@
         valid_until: validUntilIn.value,
         features_json: featIn.value,
         webhook_url: whIn.value,
+        allow_http_webhook: allowHttpCb.checked,
         rotate_secret: rotateCb.checked,
       });
     },
@@ -489,7 +508,7 @@
       emailIn.removeAttribute('name');
       emailIn.removeAttribute('required');
       keyRow.style.display = '';
-      keyEl.textContent = lic.key;
+      keyEl.textContent = lic.key_display;
       keyEmailEl.textContent = lic.email;
       // Edit mode: customer name is read-only. The license-edit endpoint
       // doesn't accept this field anymore (renaming a tenant-wide Customer
@@ -511,6 +530,8 @@
       validUntilIn.value = lic.valid_until;
       featIn.value = lic.features_json;
       whIn.value = lic.webhook_url || '';
+      allowHttpRow.style.display = '';
+      allowHttpCb.checked = !!lic.allow_http_webhook;
       rotateRow.style.display = lic.webhook_url ? '' : 'none';
       rotateCb.checked = false;
       // Reveal secret only if server flagged this as the just-set / rotated row.
@@ -561,6 +582,8 @@
       validUntilIn.removeAttribute('required');
       featIn.value = '';
       whIn.value = '';
+      allowHttpRow.style.display = '';
+      allowHttpCb.checked = false;
       rotateRow.style.display = 'none';
       rotateCb.checked = false;
       secretRow.style.display = 'none';

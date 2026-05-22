@@ -38,6 +38,7 @@ from app._time import utcnow as _utcnow
 from app.db import get_db
 from app.email import send_license_email
 from app.keystore import decrypt_secret
+from app.license_keys import hash_key, make_display
 from app.models import Customer, Event, License, ProcessedStripeEvent, Product
 
 log = logging.getLogger("license-server.stripe")
@@ -173,7 +174,9 @@ def _extend_or_create(
         lic = License(
             product_id=product.id,
             customer_id=cust.id,
-            key=key,
+            key=key,                           # deprecated; will drop in v1.1
+            key_hash=hash_key(key),
+            key_display=make_display(key),
             plan="standard",
             max_users=10,
             features={},

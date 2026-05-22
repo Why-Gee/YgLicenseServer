@@ -38,10 +38,26 @@ log = logging.getLogger("license-server.exports")
 
 router = APIRouter(prefix="/v1/admin/exports", dependencies=[Depends(_require_admin)])
 
+_UNSAFE_PREFIX: tuple[str, ...] = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(v: str) -> str:
+    """Spreadsheet-formula guard. Excel/LibreOffice interpret a cell starting
+    with `=`, `+`, `-`, `@`, TAB, or CR as a formula and execute it; prefixing
+    with a single apostrophe is the canonical neutralisation.
+
+    Applied to every cell emitted by every CSV export so a malicious customer
+    name / email / payload that lands in the DB can't fire a formula when the
+    admin opens the file."""
+    if v and v[0] in _UNSAFE_PREFIX:
+        return "'" + v
+    return v
+
 
 def _csv_stream(header: list[str], rows: Iterator[list[str]]) -> Iterator[bytes]:
     """Yield CSV bytes in chunks. One buffer reused across rows so we never
-    hold the whole file in memory."""
+    hold the whole file in memory. Every data cell is run through `_csv_safe`
+    so a value starting with a formula character is neutralised."""
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(header)
@@ -49,7 +65,7 @@ def _csv_stream(header: list[str], rows: Iterator[list[str]]) -> Iterator[bytes]
     buf.seek(0)
     buf.truncate(0)
     for row in rows:
-        writer.writerow(row)
+        writer.writerow([_csv_safe(cell) for cell in row])
         yield buf.getvalue().encode("utf-8")
         buf.seek(0)
         buf.truncate(0)
@@ -116,7 +132,7 @@ def export_licenses(slug: str, db: Session = Depends(get_db)) -> StreamingRespon
     def gen() -> Iterator[list[str]]:
         for r in rows_q:
             yield [
-                r.id, r.key, r.plan, r.status, str(r.max_users),
+                r.id, r.key_display, r.plan, r.status, str(r.max_users),
                 _iso(r.valid_until),
                 r.customer.email if r.customer else "",
                 r.customer.name if (r.customer and r.customer.name) else "",

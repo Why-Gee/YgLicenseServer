@@ -13,6 +13,10 @@ KEK envelope:
   plaintext). Lets dev/test work without configuring a KEK; production
   should always set one. The boot-time validator logs a CRITICAL warning
   when missing.
+- When `LICENSE_SERVER_REQUIRE_KEK=1` (v0.22+) is set in env, the no-KEK
+  passthrough is upgraded to a hard `RuntimeError` so a misconfigured
+  prod deploy can never silently persist plaintext. Boot also hard-exits
+  in that combination — fail-fast on misconfiguration.
 
 Why envelope: rotating the KEK only needs a re-write of each row, not a
 re-keygen of every product's Ed25519 pair (which would invalidate every
@@ -100,6 +104,11 @@ def encrypt_secret(plaintext: str | None) -> str | None:
         return plaintext
     f = _fernet()
     if f is None:
+        if get_settings().require_kek:
+            raise RuntimeError(
+                "KEK required (LICENSE_SERVER_REQUIRE_KEK=1) but "
+                "LICENSE_KEY_ENCRYPTION_KEY is unset; refusing to write plaintext"
+            )
         return plaintext
     token = f.encrypt(plaintext.encode("utf-8"))
     return _PREFIX + token.decode("ascii")
