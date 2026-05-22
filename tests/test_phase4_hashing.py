@@ -108,3 +108,18 @@ def test_boot_validator_exits_when_kek_required_and_pepper_unset(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         main_mod._validate_secrets_at_boot()
     assert exc.value.code == 78
+
+
+# ---------- schema -----------------------------------------------------------
+
+
+def test_license_model_has_key_hash_and_key_display_columns(monkeypatch):
+    """ORM model defines the new columns."""
+    monkeypatch.setenv("LICENSE_KEY_PEPPER", "x")
+    _reload_config()
+    import importlib
+    import app.models
+    importlib.reload(app.models)
+    cols = {c.name for c in app.models.License.__table__.columns}
+    assert "key_hash" in cols
+    assert "key_display" in cols

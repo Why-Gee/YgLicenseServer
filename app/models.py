@@ -153,6 +153,14 @@ class License(Base):
         Integer, default=0, nullable=False,
     )
 
+    # v1.0+: BLAKE2b-keyed hash of the plaintext key. /v1/check looks up
+    # licenses by this column, not by the plaintext. The plaintext column
+    # is retained for one release (deprecated) so an in-place migration
+    # rollback is possible; drop in v1.1.
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    # Truncated prefix+tail safe to show anywhere. `<prefix>_<first6>…<last4>`.
+    key_display: Mapped[str] = mapped_column(String(32), nullable=False)
+
     product: Mapped[Product] = relationship(back_populates="licenses")
     customer: Mapped[Customer] = relationship(back_populates="licenses")
     # When a License is deleted, fan out and delete its Installs in the same
