@@ -40,6 +40,11 @@ class Settings(BaseModel):
     db_pool_size: int = 5
     db_max_overflow: int = 10
     db_pool_recycle: int = 1800  # 30 min
+    # BLAKE2b key (pepper) used by app.license_keys.hash_key. Required when
+    # LICENSE_SERVER_REQUIRE_KEK=1 so a DB dump without the pepper cannot
+    # brute-force keys. Unset means hash_key() raises — there is no plaintext
+    # fallback for license lookup in v1.0+.
+    license_key_pepper: str = ""
 
 
 @lru_cache(maxsize=1)
@@ -58,4 +63,5 @@ def get_settings() -> Settings:
         db_pool_size=int(os.environ.get("DB_POOL_SIZE", "5")),
         db_max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "10")),
         db_pool_recycle=int(os.environ.get("DB_POOL_RECYCLE", "1800")),
+        license_key_pepper=os.environ.get("LICENSE_KEY_PEPPER", ""),
     )

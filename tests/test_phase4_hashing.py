@@ -1,0 +1,110 @@
+"""Phase 4 at-rest key hashing — TDD tests for pepper config + helpers."""
+from __future__ import annotations
+
+
+def _reload_config() -> None:
+    import importlib
+    import app.config as cfg
+    importlib.reload(cfg)
+
+
+# ---------- pepper env var --------------------------------------------------
+
+
+def test_license_key_pepper_unset_default(monkeypatch):
+    """Default deploys without LICENSE_KEY_PEPPER have an empty pepper."""
+    monkeypatch.delenv("LICENSE_KEY_PEPPER", raising=False)
+    _reload_config()
+    from app.config import get_settings
+    assert get_settings().license_key_pepper == ""
+
+
+def test_license_key_pepper_set_from_env(monkeypatch):
+    """Setting LICENSE_KEY_PEPPER populates the Settings field."""
+    monkeypatch.setenv("LICENSE_KEY_PEPPER", "test-pepper-32bytes-base64encoded=")
+    _reload_config()
+    from app.config import get_settings
+    assert get_settings().license_key_pepper == "test-pepper-32bytes-base64encoded="
+
+
+# ---------- hash_key + make_display helpers ---------------------------------
+
+
+def test_hash_key_deterministic(monkeypatch):
+    """Same input + pepper always produces same output (deterministic lookup)."""
+    monkeypatch.setenv("LICENSE_KEY_PEPPER", "test-pepper-1234567890")
+    _reload_config()
+    import importlib
+    import app.license_keys as lk
+    importlib.reload(lk)
+    a = lk.hash_key("asm_abc123")
+    b = lk.hash_key("asm_abc123")
+    assert a == b
+    assert len(a) == 64  # blake2b-256 hex = 64 chars
+
+
+def test_hash_key_different_pepper_yields_different_hash(monkeypatch):
+    """Pepper affects the hash output — DB dump without pepper is useless."""
+    monkeypatch.setenv("LICENSE_KEY_PEPPER", "pepper-A")
+    _reload_config()
+    import importlib
+    import app.license_keys as lk
+    importlib.reload(lk)
+    h_a = lk.hash_key("asm_abc123")
+
+    monkeypatch.setenv("LICENSE_KEY_PEPPER", "pepper-B")
+    _reload_config()
+    importlib.reload(lk)
+    h_b = lk.hash_key("asm_abc123")
+    assert h_a != h_b
+
+
+def test_hash_key_refuses_when_pepper_unset(monkeypatch):
+    """Calling hash_key without a pepper configured raises; the server must
+    be configured before it can compute hashes that match the DB."""
+    monkeypatch.delenv("LICENSE_KEY_PEPPER", raising=False)
+    _reload_config()
+    import importlib
+    import app.license_keys as lk
+    importlib.reload(lk)
+    import pytest
+    with pytest.raises(RuntimeError, match="LICENSE_KEY_PEPPER"):
+        lk.hash_key("asm_abc123")
+
+
+def test_make_display_format(monkeypatch):
+    """key_display = <prefix>_<first6>…<last4>. Always safe to show in UI."""
+    monkeypatch.setenv("LICENSE_KEY_PEPPER", "x")
+    _reload_config()
+    import importlib
+    import app.license_keys as lk
+    importlib.reload(lk)
+    # 32-char tail after the prefix.
+    result = lk.make_display("asm_abcDEF1234567890qwertyuiopAS")
+    assert result == "asm_abcDEF…opAS"
+    # Shorter key still works.
+    short = lk.make_display("xy_aB1234")
+    # 6 chars + last 4 = 10 chars; the key body is "aB1234" (6 chars).
+    # last 4 == "1234" which overlaps the first 6; format still applies cleanly.
+    assert short.startswith("xy_") and "…" in short
+
+
+# ---------- boot validator --------------------------------------------------
+
+
+def test_boot_validator_exits_when_kek_required_and_pepper_unset(monkeypatch):
+    """LICENSE_SERVER_REQUIRE_KEK=1 + LICENSE_KEY_PEPPER unset → sys.exit(78)."""
+    monkeypatch.setenv("ADMIN_TOKEN", "x")
+    monkeypatch.setenv("SESSION_SECRET", "y")
+    from cryptography.fernet import Fernet
+    monkeypatch.setenv("LICENSE_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("LICENSE_SERVER_REQUIRE_KEK", "1")
+    monkeypatch.delenv("LICENSE_KEY_PEPPER", raising=False)
+    _reload_config()
+    import importlib
+    import app.main as main_mod
+    importlib.reload(main_mod)
+    import pytest
+    with pytest.raises(SystemExit) as exc:
+        main_mod._validate_secrets_at_boot()
+    assert exc.value.code == 78
