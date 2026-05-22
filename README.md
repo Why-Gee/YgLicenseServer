@@ -12,7 +12,7 @@ Originally extracted from [Animal Shelter Manager](https://github.com/Why-Gee/An
 
 - **Product** — a separately-licensed app (e.g. `asm`, `app2`). Each product gets its own Ed25519 keypair, key prefix, and (optional) Stripe webhook secret. The public key is baked into the client app's image; the private key never leaves this server.
 - **Customer** — an email + optional Stripe customer ID. Customers can hold licenses across multiple products.
-- **License** — a key (`asm_…`) bound to one customer + one product. Carries `plan`, `max_users`, `features` (free-form JSON), `valid_until`, `status` (active / delinquent / revoked).
+- **License** — a key (`asm_…`) bound to one customer + one product. Carries `plan`, `max_users`, `features` (free-form JSON), `valid_until`, `status` (active / delinquent / revoked). **Storage shape:** the server stores a peppered BLAKE2b hash (for `/v1/check` lookups) and a truncated display form (`<prefix>_<first6>…<last4>`) for safe rendering. The plaintext key is shown ONCE at issuance — in the API response, the email, and the admin-UI flash banner. Save it then; you can't recover it from the DB.
 - **Install** — a heartbeat row updated each time a client calls `/v1/check`. Stable per-host via the client's machine-id.
 
 ## Quick start
@@ -81,12 +81,15 @@ Minimal client check (Python, pyjwt):
 
 ```python
 import jwt
-# v0.22+: tokens carry a `kid` claim (opaque product id); harmless to ignore.
-# v1.0+ (planned): tokens will also carry `aud` = product slug. Once that lands,
-# this call MUST pass `audience=product_slug` or pyjwt will raise InvalidAudienceError.
-# Today (no aud), the call below works as-is.
-claims = jwt.decode(token, public_key_pem, algorithms=["EdDSA"], options={"verify_exp": False})
-# claims has: license_id, install_id, plan, max_users, features, valid_until, product, kid
+# v1.0+: tokens carry kid (opaque product id) + aud (product slug).
+# audience= is REQUIRED — pyjwt will raise InvalidAudienceError otherwise.
+claims = jwt.decode(
+    token, public_key_pem,
+    algorithms=["EdDSA"],
+    audience=product_slug,
+    options={"verify_exp": False},
+)
+# claims has: license_id, install_id, plan, max_users, features, valid_until, product, kid, aud
 ```
 
 `valid_until` is the source of truth for license expiry; `exp` is just the JWT cache TTL (default 7 days). Clients honor a configurable grace period after `valid_until` so the server can be down briefly without breaking customers.
