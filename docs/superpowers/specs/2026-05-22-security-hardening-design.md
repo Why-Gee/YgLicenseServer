@@ -43,7 +43,7 @@ Close the three concrete vulnerabilities + eight hardening notes from the 2026-0
 
 **Audit:** On every URL-source flip or refused update, write an `Event(type="webhook:locked"|"webhook:self-registered", payload={previous_url, new_url, source})`.
 
-**Alembic migration:** add column with default `'self'` for existing rows. Backfill `'admin'` where a `webhook_url` is already set and there is at least one admin-originated `webhook:updated` event for the license; otherwise leave `'self'`. (Heuristic; explicit re-classification via the admin UI is the operator's escape hatch.)
+**Alembic migration:** add column with default `'self'`. Then backfill: rows where `webhook_url IS NOT NULL` → `'admin'` (lock them down — they were configured deliberately, no reason for a license-key holder to be able to override). Rows where `webhook_url IS NULL` → keep `'self'` default. Admin can flip via UI on a per-license basis if they want client self-registration on a specific license.
 
 ### Vuln 2 — DNS-rebinding bypass of webhook SSRF guard
 
@@ -217,7 +217,7 @@ ${LICENSE_HOST} {
 - New per-license column `licenses.allow_http_webhook` `Bool NOT NULL DEFAULT FALSE`.
 - Admin UI gains a checkbox under the webhook URL field: "Allow plain HTTP (LAN install only)".
 - `apply_webhook_config` / `check_license` callers pass `allow_http=lic.allow_http_webhook` into the validator.
-- Existing licenses with `http://` URLs get the flag set to `True` in the migration so behaviour doesn't regress.
+- Existing licenses with `http://` URLs get `allow_http_webhook=True` in the migration so behaviour doesn't regress; new URLs default to HTTPS-only.
 
 ### Pyproject drift fix
 
@@ -310,9 +310,9 @@ Per phase, per fix: TDD red-green.
 - KEK rotation already supported via `LICENSE_KEY_ENCRYPTION_KEY_PREV` — no new mechanism for the new pepper (it's append-only; rotating it would require re-issuing every license).
 - v1.0 needs a deploy-time backup of the DB *before* the hash migration runs. Document in `docs/deploy/gcp.md` and gate via a pre-migration warning in `docker-entrypoint.sh`.
 
-## Unresolved questions
+## Resolved decisions
 
-- Existing `http://` webhook URLs: migrate them to `allow_http=True` automatically, or leave them broken and force the admin to re-tick the box? (Spec assumes automatic migration; flag in PR.)
-- Recovery-code count: spec says 10. OK?
-- Phase 4 pepper rotation story: spec leaves it as "append-only". Acceptable?
-- Webhook-source backfill heuristic in Vuln 1 migration: `admin` if a `webhook:updated` event exists else `self`. OK? Alternative: leave all as `'self'` and require admin to flip via UI for the locked-down behaviour.
+- Existing `http://` webhook URLs: auto-migrate to `allow_http=True`. New URLs default to HTTPS-only.
+- Recovery-code count: 10.
+- Pepper rotation: append-only. Documented in CHANGELOG; multi-version pepper deferred unless ops experience says otherwise.
+- Webhook-source backfill: existing rows with `webhook_url IS NOT NULL` → `'admin'` (locked). NULL → `'self'`. Per-license flip via admin UI.
