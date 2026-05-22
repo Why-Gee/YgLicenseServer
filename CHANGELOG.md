@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.0.4 — VM systemd timer fix
+
+Config-only release. The container image is byte-identical to v1.0.3; this
+bump exists so the deployed VM-config (under `deploy/gcp/`) and the tagged
+release move together.
+
+- **`deploy/gcp/yg-license-retry-webhooks.service`,
+  `yg-license-expiry-warnings.service`,
+  `yg-license-prune-events.service`** — added `--entrypoint python` to the
+  `docker run` command. The image's `docker-entrypoint.sh` exec's
+  `uvicorn app.main:app …` and was eating the timer's `-m app.scripts.X`
+  args, exiting with `Error: No such option '-m'.` on every fire. The
+  retry queue never recovered failed deliveries — only in-process
+  BackgroundTasks dispatch (which works on the happy path) was actually
+  delivering. Surfaced via the WO-tracker v1.0.3 LS-side smoke.
+- **`scripts/smoke_v1_0_3.py`** added — self-contained prod smoke that
+  surfaced the bug. Reusable for future point-releases.
+
+VM-side, the fixed unit files were `scp`-installed + `daemon-reload`-ed
+out-of-band; this release tags the source of truth so VM rebuilds pick
+them up.
+
 ## v1.0.3 — webhook source UX + heartbeat resilience
 
 Polish pass driven by the WorkoutTracker v1.0 compat findings (see
