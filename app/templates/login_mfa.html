@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}MFA — Verify{% endblock %}
+{% block content %}
+<div style="max-width:380px;margin:6em auto;">
+  <h2>Multi-Factor Authentication</h2>
+  {% if error %}<div class="error">invalid code, try again</div>{% endif %}
+  <form method="post" action="/admin/login/mfa" class="card">
+    <label for="code">6-digit code (or recovery code)</label>
+    <input id="code" name="code" type="text" autofocus required autocomplete="one-time-code">
+    <button type="submit" style="margin-top:1em;width:100%;">Verify</button>
+  </form>
+  <p class="muted" style="text-align:center;font-size:.85em;">
+    enter the code from your authenticator app, or one of your 10 recovery codes
+  </p>
+</div>
+{% endblock %}

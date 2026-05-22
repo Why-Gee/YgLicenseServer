@@ -29,6 +29,9 @@ templates.env.globals["app_version"] = __version__
 SESSION_COOKIE = "ls_session"
 SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
 
+PRE_MFA_COOKIE = "ls_pre_mfa"
+PRE_MFA_MAX_AGE_SECONDS = 5 * 60  # 5 min window to enter the OTP
+
 templates.env.globals["session_cookie_name"] = SESSION_COOKIE
 
 
@@ -99,6 +102,29 @@ def serializer() -> URLSafeSerializer:
     if not s.session_secret:
         raise HTTPException(status_code=503, detail="SESSION_SECRET not set")
     return URLSafeSerializer(s.session_secret, salt="admin-session")
+
+
+def pre_mfa_serializer() -> URLSafeSerializer:
+    """Separate serializer salt for the pre-MFA cookie so a session-cookie
+    leak cannot be replayed as a pre-MFA cookie or vice versa."""
+    s = get_settings()
+    if not s.session_secret:
+        raise HTTPException(status_code=503, detail="SESSION_SECRET not set")
+    return URLSafeSerializer(s.session_secret, salt="admin-pre-mfa")
+
+
+def pre_mfa_valid(request: Request) -> bool:
+    raw = request.cookies.get(PRE_MFA_COOKIE)
+    if not raw:
+        return False
+    try:
+        data = pre_mfa_serializer().loads(raw)
+    except BadSignature:
+        return False
+    iat = data.get("iat") if isinstance(data, dict) else None
+    if not isinstance(iat, int):
+        return False
+    return (int(time.time()) - iat) <= PRE_MFA_MAX_AGE_SECONDS
 
 
 def logged_in(request: Request) -> bool:

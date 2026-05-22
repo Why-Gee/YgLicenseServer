@@ -185,3 +185,67 @@ def test_mfa_regen_recovery_rejects_wrong_otp(client):
     from app.services import mfa as mfa_svc
     with SessionLocal() as s:
         assert mfa_svc.verify_login(s, old_codes[0]) is True
+
+
+# ---------- login flow integration -----------------------------------------
+
+
+def test_login_without_mfa_works_as_before(client):
+    """With no MFA row (or enabled=False), POST /admin/login lands at /admin."""
+    r = client.post("/admin/login", data={"token": "test-admin"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/admin"
+
+
+def test_login_with_mfa_enabled_redirects_to_mfa_step(client):
+    """When admin_mfa.enabled=True, POST /admin/login lands at /admin/login/mfa
+    with a pre-mfa cookie (NOT the full session cookie yet)."""
+    # First: enrol + enable MFA.
+    cookies = _login(client)
+    r = _post(client, "/admin/mfa/enroll", cookies)
+    secret = r.json()["secret"]
+    _post(client, "/admin/mfa/verify-enroll", cookies, data={"code": pyotp.TOTP(secret).now()})
+    # Now log out and log back in.
+    client.cookies.clear()
+    r = client.post("/admin/login", data={"token": "test-admin"}, follow_redirects=False)
+    assert r.status_code == 303, r.text
+    assert r.headers["location"] == "/admin/login/mfa"
+    assert "ls_pre_mfa" in r.cookies
+    assert "ls_session" not in r.cookies
+
+
+def test_login_mfa_step_completes_with_valid_otp(client):
+    """The MFA-step POST swaps the pre-mfa cookie for a full session cookie."""
+    cookies = _login(client)
+    r = _post(client, "/admin/mfa/enroll", cookies)
+    secret = r.json()["secret"]
+    _post(client, "/admin/mfa/verify-enroll", cookies, data={"code": pyotp.TOTP(secret).now()})
+    client.cookies.clear()
+    r = client.post("/admin/login", data={"token": "test-admin"}, follow_redirects=False)
+    pre_cookie = {"ls_pre_mfa": r.cookies["ls_pre_mfa"]}
+    code = pyotp.TOTP(secret).now()
+    r = client.post(
+        "/admin/login/mfa",
+        data={"code": code},
+        cookies=pre_cookie, follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    assert r.headers["location"] == "/admin"
+    assert "ls_session" in r.cookies
+
+
+def test_login_mfa_step_rejects_bad_code(client):
+    cookies = _login(client)
+    r = _post(client, "/admin/mfa/enroll", cookies)
+    secret = r.json()["secret"]
+    _post(client, "/admin/mfa/verify-enroll", cookies, data={"code": pyotp.TOTP(secret).now()})
+    client.cookies.clear()
+    r = client.post("/admin/login", data={"token": "test-admin"}, follow_redirects=False)
+    pre_cookie = {"ls_pre_mfa": r.cookies["ls_pre_mfa"]}
+    r = client.post(
+        "/admin/login/mfa", data={"code": "000000"},
+        cookies=pre_cookie, follow_redirects=False,
+    )
+    # Stays on the MFA step with an error flag.
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/admin/login/mfa")
