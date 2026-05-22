@@ -140,3 +140,48 @@ def test_recovery_code_disable_wipes_all_state(client):
         assert row.enabled == 0
         assert row.secret_encrypted is None
         assert row.recovery_codes_hashed is None
+
+
+# ---------- regen recovery codes -------------------------------------------
+
+
+def test_mfa_regen_recovery_returns_fresh_codes(client):
+    """regen-recovery with a valid OTP returns 10 fresh recovery codes
+    and invalidates the old ones."""
+    cookies = _login(client)
+    r = _post(client, "/admin/mfa/enroll", cookies)
+    secret = r.json()["secret"]
+    enrol = _post(client, "/admin/mfa/verify-enroll", cookies, data={"code": pyotp.TOTP(secret).now()})
+    old_codes = enrol.json()["recovery_codes"]
+
+    r = _post(client, "/admin/mfa/regen-recovery", cookies, data={"code": pyotp.TOTP(secret).now()})
+    assert r.status_code == 200, r.text
+    new_codes = r.json()["recovery_codes"]
+    assert len(new_codes) == 10
+    assert set(new_codes).isdisjoint(set(old_codes)), "regen should produce disjoint set"
+
+    # Old codes must no longer authenticate.
+    from app.db import SessionLocal
+    from app.services import mfa as mfa_svc
+    with SessionLocal() as s:
+        assert mfa_svc.verify_login(s, old_codes[0]) is False, "old recovery code still valid after regen"
+        # And a fresh one IS valid.
+        assert mfa_svc.verify_login(s, new_codes[0]) is True
+
+
+def test_mfa_regen_recovery_rejects_wrong_otp(client):
+    """regen-recovery with a bad OTP returns 400 and leaves recovery codes intact."""
+    cookies = _login(client)
+    r = _post(client, "/admin/mfa/enroll", cookies)
+    secret = r.json()["secret"]
+    enrol = _post(client, "/admin/mfa/verify-enroll", cookies, data={"code": pyotp.TOTP(secret).now()})
+    old_codes = enrol.json()["recovery_codes"]
+
+    r = _post(client, "/admin/mfa/regen-recovery", cookies, data={"code": "000000"})
+    assert r.status_code == 400, r.text
+
+    # Old codes still valid.
+    from app.db import SessionLocal
+    from app.services import mfa as mfa_svc
+    with SessionLocal() as s:
+        assert mfa_svc.verify_login(s, old_codes[0]) is True

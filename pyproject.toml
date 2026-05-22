@@ -19,7 +19,6 @@ dependencies = [
     "httpx>=0.28",
     "slowapi>=0.1.9",
     "pyotp>=2.9",
-    "qrcode>=7.4",
 ]
 
 [project.optional-dependencies]
