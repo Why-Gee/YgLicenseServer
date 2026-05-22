@@ -67,27 +67,16 @@ class CheckOut(BaseModel):
 
 
 def _client_ip_hash(request: Request) -> str | None:
-    """SHA256 of the originating IP. Reads X-Forwarded-For when the request
-    came through a trusted proxy (Caddy in our deploy), falling back to the
-    direct socket peer.
-
-    Trust model: we only honor X-Forwarded-For when the immediate peer
-    (request.client.host) is loopback. In our deploy Caddy listens on
-    127.0.0.1 only -- anything from off-box hits Caddy first, gets the
-    XFF header, and reaches us via loopback. Direct hits (impossible in
-    prod) would expose the socket peer.
-    """
+    """SHA-256 of the immediate-peer IP. We never trust client-supplied
+    X-Forwarded-For: Caddy *appends* XFF, so its leftmost entry is whatever
+    the client sent — strictly worse than the socket peer. In our deploy
+    Caddy is on 127.0.0.1, so request.client.host is the last-hop value
+    set by the proxy; trust that and only that. Behind a multi-hop CDN a
+    future reader will need to be added that explicitly trusts only the
+    rightmost N entries from a configured proxy chain."""
     if request.client is None:
         return None
-    peer = request.client.host
-    src = peer
-    if peer in ("127.0.0.1", "::1") and "x-forwarded-for" in request.headers:
-        # XFF is comma-separated; LEFTMOST entry is the original client.
-        xff = request.headers["x-forwarded-for"]
-        first = next((p.strip() for p in xff.split(",") if p.strip()), None)
-        if first:
-            src = first
-    return hashlib.sha256(src.encode()).hexdigest()
+    return hashlib.sha256(request.client.host.encode()).hexdigest()
 
 
 @router.post("/v1/check", response_model=CheckOut)

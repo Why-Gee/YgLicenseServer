@@ -9,11 +9,8 @@ in-memory storage is the default, which is the right fit for our single-VM
 deploy. If/when we go multi-instance, swap `storage_uri` to Redis without
 touching call sites.
 
-IP-key derivation: we reuse the same loopback-aware XFF logic as
-`_client_ip_hash` in [app.routers.api]. Caddy sits on 127.0.0.1 in our
-deploy, so the immediate peer is always loopback in prod, and we trust the
-leftmost `X-Forwarded-For` entry. Direct (non-Caddy) hits, which shouldn't
-happen in prod but might in dev, fall back to the socket peer.
+IP-key derivation: request.client.host only — no XFF parsing. Caddy on
+loopback means request.client.host IS the last-hop IP set by the proxy.
 
 Don't apply these limiters to the JSON admin API (/v1/admin/*): it's already
 behind a 32-byte bearer token with constant-time compare, and rate-limiting
@@ -30,19 +27,14 @@ from starlette.responses import JSONResponse
 
 
 def client_ip(request: Request) -> str:
-    """Return the originating IP for rate-limit keying. Honors leftmost
-    X-Forwarded-For only when the immediate peer is loopback (Caddy on the
-    same VM). Mirrors `_client_ip_hash` in app.routers.api so the two
-    derivations don't drift."""
+    """Rate-limit key. Mirrors _client_ip_hash in app.routers.api:
+    request.client.host only — no XFF parsing. Caddy on loopback means
+    request.client.host IS the last-hop IP. Any future multi-hop deploy
+    should re-introduce a trusted-proxies-aware reader here AND in api.py
+    together so the two derivations don't drift."""
     if request.client is None:
         return get_remote_address(request)
-    peer = request.client.host
-    if peer in ("127.0.0.1", "::1") and "x-forwarded-for" in request.headers:
-        xff = request.headers["x-forwarded-for"]
-        first = next((p.strip() for p in xff.split(",") if p.strip()), None)
-        if first:
-            return first
-    return peer
+    return request.client.host
 
 
 # headers_enabled=False because slowapi's injector only works when the
