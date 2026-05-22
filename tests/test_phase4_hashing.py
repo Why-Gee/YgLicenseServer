@@ -4,6 +4,7 @@ from __future__ import annotations
 
 def _reload_config() -> None:
     import importlib
+
     import app.config as cfg
     importlib.reload(cfg)
 
@@ -35,6 +36,7 @@ def test_hash_key_deterministic(monkeypatch):
     monkeypatch.setenv("LICENSE_KEY_PEPPER", "test-pepper-1234567890")
     _reload_config()
     import importlib
+
     import app.license_keys as lk
     importlib.reload(lk)
     a = lk.hash_key("asm_abc123")
@@ -48,6 +50,7 @@ def test_hash_key_different_pepper_yields_different_hash(monkeypatch):
     monkeypatch.setenv("LICENSE_KEY_PEPPER", "pepper-A")
     _reload_config()
     import importlib
+
     import app.license_keys as lk
     importlib.reload(lk)
     h_a = lk.hash_key("asm_abc123")
@@ -65,6 +68,7 @@ def test_hash_key_refuses_when_pepper_unset(monkeypatch):
     monkeypatch.delenv("LICENSE_KEY_PEPPER", raising=False)
     _reload_config()
     import importlib
+
     import app.license_keys as lk
     importlib.reload(lk)
     import pytest
@@ -77,6 +81,7 @@ def test_make_display_format(monkeypatch):
     monkeypatch.setenv("LICENSE_KEY_PEPPER", "x")
     _reload_config()
     import importlib
+
     import app.license_keys as lk
     importlib.reload(lk)
     # 32-char tail after the prefix.
@@ -102,6 +107,7 @@ def test_boot_validator_exits_when_kek_required_and_pepper_unset(monkeypatch):
     monkeypatch.delenv("LICENSE_KEY_PEPPER", raising=False)
     _reload_config()
     import importlib
+
     import app.main as main_mod
     importlib.reload(main_mod)
     import pytest
@@ -118,6 +124,7 @@ def test_license_model_has_key_hash_and_key_display_columns(monkeypatch):
     monkeypatch.setenv("LICENSE_KEY_PEPPER", "x")
     _reload_config()
     import importlib
+
     import app.models
     importlib.reload(app.models)
     cols = {c.name for c in app.models.License.__table__.columns}
@@ -149,8 +156,8 @@ def test_admin_issue_populates_hash_and_display(make_client, monkeypatch):
     plaintext = r.json()["key"]
     assert plaintext.startswith("asm_")
     from app.db import SessionLocal
-    from app.models import License
     from app.license_keys import hash_key, make_display
+    from app.models import License
     with SessionLocal() as s:
         lic = s.query(License).filter_by(id=r.json()["license_id"]).one()
         assert lic.key_hash == hash_key(plaintext)
@@ -184,8 +191,8 @@ def test_migration_backfills_key_hash_and_key_display(make_client, monkeypatch):
     plaintext = r.json()["key"]
     # Confirm the row has hash + display populated.
     from app.db import SessionLocal
-    from app.models import License
     from app.license_keys import hash_key, make_display
+    from app.models import License
     with SessionLocal() as s:
         lic = s.query(License).first()
         assert lic.key_hash == hash_key(plaintext)

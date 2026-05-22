@@ -33,8 +33,9 @@ def test_client_ip_hash_ignores_xff(monkeypatch):
     even when X-Forwarded-For is present and the peer is loopback.
     Direct unit test against the helper — TestClient's peer doesn't
     simulate the loopback condition the old branch was triggered by."""
-    from app.routers.api import _client_ip_hash
     import hashlib
+
+    from app.routers.api import _client_ip_hash
 
     class _FakeRequest:
         class client:
@@ -92,6 +93,7 @@ def test_jwt_carries_kid_claim(client):
 def _reload_config_and_keystore() -> None:
     """Pick up new env vars by rebuilding the cached Settings + keystore."""
     import importlib
+
     import app.config as cfg
     importlib.reload(cfg)
     import app.keystore as ks
@@ -114,8 +116,9 @@ def test_require_kek_set_refuses_to_persist_plaintext(monkeypatch):
     monkeypatch.setenv("LICENSE_KEY_ENCRYPTION_KEY", "")
     monkeypatch.setenv("LICENSE_SERVER_REQUIRE_KEK", "1")
     _reload_config_and_keystore()
-    from app.keystore import encrypt_secret
     import pytest
+
+    from app.keystore import encrypt_secret
     with pytest.raises(RuntimeError, match="KEK required"):
         encrypt_secret("plain")
 
@@ -127,7 +130,7 @@ def test_require_kek_set_with_valid_key_works_normally(monkeypatch):
     monkeypatch.setenv("LICENSE_KEY_ENCRYPTION_KEY", kek)
     monkeypatch.setenv("LICENSE_SERVER_REQUIRE_KEK", "1")
     _reload_config_and_keystore()
-    from app.keystore import encrypt_secret, decrypt_secret, is_encrypted
+    from app.keystore import decrypt_secret, encrypt_secret, is_encrypted
     out = encrypt_secret("hello")
     assert is_encrypted(out)
     assert decrypt_secret(out) == "hello"
@@ -143,6 +146,7 @@ def test_boot_validator_exits_when_kek_required_and_unset(monkeypatch):
     monkeypatch.setenv("LICENSE_SERVER_REQUIRE_KEK", "1")
     _reload_config_and_keystore()
     import importlib
+
     import app.main as main_mod
     importlib.reload(main_mod)
     import pytest

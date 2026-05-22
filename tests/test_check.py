@@ -100,7 +100,10 @@ def test_two_products_isolated(client: TestClient) -> None:
     token = r.json()["jwt"]
 
     # Verifies under asm pubkey
-    claims = jwt_lib.decode(token, asm_pub, algorithms=["EdDSA"], audience="asm", options={"verify_exp": False})
+    claims = jwt_lib.decode(
+        token, asm_pub, algorithms=["EdDSA"], audience="asm",
+        options={"verify_exp": False},
+    )
     assert claims["product"] == "asm"
 
     # Fails under other pubkey
