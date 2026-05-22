@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.0.3 — webhook source UX + heartbeat resilience
+
+Polish pass driven by the WorkoutTracker v1.0 compat findings (see
+[`docs/v1.0-workouttracker-client-findings.md`](docs/v1.0-workouttracker-client-findings.md)).
+
+- **`/v1/check` no longer 409s on a `public_url` mismatch against an
+  admin-set URL.** The heartbeat continues, JWT is minted, URL stays
+  unchanged, and an `Event` row of type `webhook:override_refused` records
+  the attempt. Previously a client that hardcoded a `public_url` and ran
+  into an admin-set license fell into grace + got blocked because every
+  heartbeat failed.
+- **`webhook_url_source` surfaces in the admin UI** as a small badge
+  (`admin` / `self`) next to the webhook URL field. A muted hint below
+  spells out whether the secret is echoed via `/v1/check` and whether
+  client overrides are honored.
+- **"Convert to self" admin button.** Visible in the license-edit modal
+  only when `source='admin'` + a URL is set. One click: keeps the URL,
+  flips source to `self`, rotates the secret (so the new one will be
+  echoed via `/v1/check`). Old admin-distributed secret is invalidated.
+- **New doc:** [`docs/v1.0-client-compat.md`](docs/v1.0-client-compat.md)
+  consolidates the v1.0 client-side integration concerns (aud claim,
+  webhook self-register, key-display semantics, kid claim).
+- **CHANGELOG v1.0.0 entry backfilled** with the webhook URL-source split
+  (previously only the aud + key-storage breaking changes were listed).
+
+No schema or wire-format changes; safe drop-in upgrade from v1.0.2.
+
 ## v1.0.2 — MFA enrolment QR code
 
 `/admin/mfa` now renders a scannable QR code alongside the otpauth URI and
@@ -56,6 +83,27 @@ JWT payload now includes `aud = product.slug`. Client code that decodes via
 `jwt.decode(token, pub, algorithms=[...], options={"verify_exp": False})` will
 raise `InvalidAudienceError` until the call adds `audience=product_slug`. See
 the README's client-integration example.
+
+### Webhook URL source split (`admin` vs `self`)
+
+Licenses gained a `webhook_url_source` column (`'admin'` | `'self'`,
+default `'self'`). Provenance affects two policies on `/v1/check`:
+
+- **Secret echo.** When `source='admin'`, the `/v1/check` response field
+  `webhook_secret` is always `null`. The signing secret only round-trips
+  to the client for self-registered URLs. Pre-v1.0 clients that persisted
+  the echoed secret from `/v1/check` must either (a) re-fetch the secret
+  via the admin-UI one-time display and bake it in, or (b) self-register
+  by sending `public_url` on `/v1/check` (the URL must be unset on the
+  server side first, or the operator must use the new "Convert to self"
+  button — see v1.0.3 below).
+- **Override lockout.** Prior to v1.0.3, `/v1/check` returned 409
+  `webhook_url_locked` if a client sent a `public_url` that differed from
+  an admin-set URL — the entire heartbeat failed. v1.0.3 softened this to
+  log + audit-event only; see that release's notes.
+
+See [`docs/v1.0-client-compat.md`](docs/v1.0-client-compat.md) for the
+self-register integration pattern.
 
 ### Upgrade procedure
 

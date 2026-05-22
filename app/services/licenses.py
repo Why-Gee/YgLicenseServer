@@ -358,6 +358,39 @@ def configure_webhook(
     db.commit()
 
 
+def convert_webhook_to_self(
+    db: Session, lic: License, *, note: str = "service/convert-to-self",
+) -> None:
+    """Flip an admin-set webhook to `source='self'`:
+
+    - Keeps the URL unchanged (one-click migration; no re-typing).
+    - Rotates the signing secret (the new one will be echoed via /v1/check;
+      the old admin-distributed one is now invalidated, which is desired —
+      if the customer's receiver still verifies HMAC with the old secret
+      they need to re-fetch it via /v1/check anyway).
+    - Allows future /v1/check public_url updates against this license.
+
+    See docs/v1.0-workouttracker-client-findings.md item 1. Commits.
+    """
+    if not lic.webhook_url:
+        raise ValidationFailed("no webhook url to convert")
+    if lic.webhook_url_source != "admin":
+        raise ValidationFailed("already self-registered")
+    old_secret = lic.webhook_secret
+    lic.webhook_url_source = "self"
+    lic.webhook_secret = wh.generate_secret()
+    db.add(Event(
+        license_id=lic.id, product_id=lic.product_id,
+        type="webhook:converted_to_self",
+        payload={
+            "url": lic.webhook_url,
+            "old_secret_invalidated": bool(old_secret),
+        },
+        note=note,
+    ))
+    db.commit()
+
+
 @dataclass(frozen=True)
 class WebhookTestResult:
     ok: bool

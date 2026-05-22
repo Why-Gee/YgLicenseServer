@@ -197,6 +197,7 @@
       "features_json": {{ (lic.features|tojson)|tojson }},
       "status": {{ lic.status|tojson }},
       "webhook_url": {{ (lic.webhook_url or '')|tojson }},
+      "webhook_url_source": {{ (lic.webhook_url_source or 'self')|tojson }},
       "webhook_secret": {{ (lic.webhook_secret or '')|tojson }},
       "allow_http_webhook": {{ 1 if lic.allow_http_webhook else 0 }}
     }{% if not loop.last %},{% endif %}
@@ -267,7 +268,21 @@
         <input id="lm-features" name="features_json" placeholder='{"premium": true, "trial": false}'>
       </div>
       <div style="grid-column:1/-1;border-top:1px solid var(--bd);padding-top:.7em;margin-top:.3em;">
-        <label style="margin-top:0;font-weight:600;color:var(--fg);">Webhook (Optional)</label>
+        <label style="margin-top:0;font-weight:600;color:var(--fg);">Webhook (Optional)
+          {# Source badge: admin-set URLs lock /v1/check overrides and
+             never echo the secret to clients; self-registered URLs do
+             both. Operators need to see which mode a license is in. #}
+          <span id="lm-webhook-source" class="badge" style="display:none;margin-left:.5em;font-size:.7em;vertical-align:middle;"></span>
+          {# Convert-to-self button: admin-only escape hatch when a license
+             is admin-set but the client expects to use self-register
+             (which echoes the secret over /v1/check). Visible in edit
+             mode w/ a URL set + source='admin'. #}
+          <button type="submit" id="lm-convert-self-btn" class="btn muted"
+                  style="display:none;margin-left:.5em;font-size:.75em;padding:.2em .55em;"
+                  formaction="" formnovalidate
+                  title="Flip this license to self-registered: keeps the URL, regenerates the signing secret, allows /v1/check overrides + secret echo. One-way: re-locking to admin source requires clearing + re-setting the URL via the admin form.">Convert to self</button>
+        </label>
+        <small id="lm-webhook-source-hint" class="muted" style="display:none;margin-bottom:.4em;"></small>
         <small class="muted" style="display:block;margin-bottom:.4em;">if set, LS POSTs license events here (status changes, deletes) signed with HMAC. signing secret is generated + shown once after issuance / rotation.</small>
         <div style="display:flex;gap:.4em;align-items:stretch;">
           <input id="lm-webhook-url" name="webhook_url" type="url" placeholder="https://customer.example.com/api/license/webhook" style="flex:1;">
@@ -355,6 +370,9 @@
   var validUntilIn = document.getElementById('lm-valid-until');
   var featIn = document.getElementById('lm-features');
   var whIn = document.getElementById('lm-webhook-url');
+  var sourceBadge = document.getElementById('lm-webhook-source');
+  var sourceHint = document.getElementById('lm-webhook-source-hint');
+  var convertSelfBtn = document.getElementById('lm-convert-self-btn');
   var allowHttpRow = document.getElementById('lm-allow-http-row');
   var allowHttpCb = document.getElementById('lm-allow-http');
   var rotateRow = document.getElementById('lm-rotate-row');
@@ -368,6 +386,39 @@
   var submitBtn = document.getElementById('lm-submit');
   var cancelBtn = document.getElementById('lm-cancel');
   var closeBtn = document.getElementById('lm-close');
+
+  // Render the source badge + secret-echo hint based on whether a URL is
+  // set + which side set it. Source is meaningless when there's no URL --
+  // hide the badge in that case rather than show "self" (which would imply
+  // "the client self-registered" when no one has).
+  function renderSourceBadge(source, hasUrl, licId) {
+    if (!hasUrl) {
+      sourceBadge.style.display = 'none';
+      sourceHint.style.display = 'none';
+      convertSelfBtn.style.display = 'none';
+      return;
+    }
+    sourceBadge.style.display = '';
+    sourceHint.style.display = '';
+    if (source === 'admin') {
+      sourceBadge.textContent = 'admin';
+      sourceBadge.className = 'badge revoked';  // reuse the muted-red style
+      sourceHint.textContent =
+        'Set by you. The signing secret is NOT echoed via /v1/check; ' +
+        'the client must already have it from the one-time display above. ' +
+        'Client public_url overrides are logged + ignored.';
+      convertSelfBtn.style.display = '';
+      convertSelfBtn.formAction = '/admin/licenses/' + licId + '/webhook/convert-to-self';
+    } else {
+      sourceBadge.textContent = 'self';
+      sourceBadge.className = 'badge active';
+      sourceHint.textContent =
+        'Registered by the client via /v1/check. The signing secret IS ' +
+        'echoed in the /v1/check response so the client can persist it. ' +
+        'Client public_url updates are accepted on every heartbeat.';
+      convertSelfBtn.style.display = 'none';
+    }
+  }
 
   // Save button = save + close. Apply = save + keep open. The auto-open
   // logic below honors a one-shot sessionStorage flag set by Save so the
@@ -540,6 +591,7 @@
       validUntilIn.value = lic.valid_until;
       featIn.value = lic.features_json;
       whIn.value = lic.webhook_url || '';
+      renderSourceBadge(lic.webhook_url_source, !!lic.webhook_url, lic.id);
       allowHttpRow.style.display = '';
       allowHttpCb.checked = !!lic.allow_http_webhook;
       rotateRow.style.display = lic.webhook_url ? '' : 'none';
@@ -592,6 +644,7 @@
       validUntilIn.removeAttribute('required');
       featIn.value = '';
       whIn.value = '';
+      renderSourceBadge(null, false, null);
       allowHttpRow.style.display = '';
       allowHttpCb.checked = false;
       rotateRow.style.display = 'none';
