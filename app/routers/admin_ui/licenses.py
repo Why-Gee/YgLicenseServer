@@ -162,6 +162,10 @@ def license_webhook_update(
 class _WebhookConfigIn(BaseModel):
     url: str  # required; empty string clears (delete url + secret)
     rotate: bool = False
+    # Optional per-license http:// opt-in. None = preserve existing flag;
+    # True = allow http:// on this license; False = revoke. Matches the
+    # admin-UI checkbox semantics on the form-driven webhook endpoint.
+    allow_http: bool | None = None
 
 
 class _WebhookConfigOut(BaseModel):
@@ -196,7 +200,9 @@ def admin_api_webhook_set(
     try:
         licenses_svc.configure_webhook(
             db, lic, url=new_url, rotate=body.rotate,
-            mint_on_url_change=False, note="api/webhook",
+            mint_on_url_change=False,
+            allow_http=body.allow_http,
+            note="api/webhook",
             payload_extra={"rotated": body.rotate},
         )
     except Unsafe as e:
