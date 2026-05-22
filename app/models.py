@@ -284,3 +284,29 @@ class ProcessedStripeEvent(Base):
     )
     type: Mapped[str] = mapped_column(String(64))
     processed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive, index=True)
+
+
+class AdminMfa(Base):
+    """Single-row table for the (single-operator) admin MFA state.
+
+    `id == 1` is enforced by a CheckConstraint — we never want a second
+    row, since "the admin" is one logical principal in this deployment
+    shape. Multi-operator setups would graduate to a per-user table.
+    """
+
+    __tablename__ = "admin_mfa"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_admin_mfa_single_row"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Integer, default=0, nullable=False)
+    # Fernet-encrypted TOTP base32 secret. Stored encrypted because anyone
+    # with the secret can forge OTPs.
+    secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # JSON list of single-use recovery-code SHA-256 hex digests. When a code
+    # is redeemed it's removed from the list (re-saved). Fernet-wrapping the
+    # list itself is overkill given each entry is already a one-way hash.
+    recovery_codes_hashed: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

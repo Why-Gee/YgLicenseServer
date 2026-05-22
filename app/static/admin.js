@@ -294,6 +294,7 @@ ready(function () {
     'products':            function (p) { return p === '/admin/products' || p.indexOf('/admin/products/') === 0; },
     'customers':           function (p) { return p === '/admin/customers' || p.indexOf('/admin/customers/') === 0; },
     'events':              function (p) { return p.indexOf('/admin/events') === 0; },
+    'mfa':                 function (p) { return p.indexOf('/admin/mfa') === 0; },
     'webhook-deliveries':  function (p) { return p.indexOf('/admin/webhook-deliveries') === 0; },
   };
   document.querySelectorAll('.sidebar-nav a[data-nav-key]').forEach(function (a) {

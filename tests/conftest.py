@@ -62,6 +62,8 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
     importlib.reload(svc_c)
     import app.services.check as svc_chk
     importlib.reload(svc_chk)
+    import app.services.mfa as svc_mfa
+    importlib.reload(svc_mfa)
     import app.services as svc
     importlib.reload(svc)
     # Routers.
@@ -87,6 +89,8 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
     importlib.reload(ui_ev)
     import app.routers.admin_ui.webhook_deliveries as ui_wd
     importlib.reload(ui_wd)
+    import app.routers.admin_ui.mfa as ui_mfa
+    importlib.reload(ui_mfa)
     import app.routers.admin_ui as ui_mod
     importlib.reload(ui_mod)
     import app.main as m
