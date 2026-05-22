@@ -306,16 +306,21 @@ def configure_webhook(
     url: str | None,
     rotate: bool,
     mint_on_url_change: bool = True,
+    source: str = "admin",
     note: str = "service/webhook",
     payload_extra: dict | None = None,
 ) -> None:
     """Set / change / clear the license webhook URL + secret. Commits.
 
+    `source` records provenance: 'admin' (default) for admin UI / JSON API
+    callers, 'self' if a future self-service endpoint ever uses this wrapper.
+    /v1/check refuses public_url overrides against 'admin' rows.
+
     `mint_on_url_change=True` matches the UI handler's convention (changing
     the URL implicitly rotates the secret). The JSON API path uses False so
     callers control rotation explicitly.
     """
-    apply_webhook_config(lic, url=url, rotate=rotate, mint_on_url_change=mint_on_url_change)
+    apply_webhook_config(lic, url=url, rotate=rotate, mint_on_url_change=mint_on_url_change, source=source)
     payload = {"set": bool(url)}
     if payload_extra:
         payload.update(payload_extra)
