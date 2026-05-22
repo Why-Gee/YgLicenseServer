@@ -5,8 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# --entrypoint python overrides the image's docker-entrypoint.sh (which would
+# otherwise prepend `uvicorn app.main:app ...` and trip on the `-m` flag).
 ExecStart=/usr/bin/docker run --rm \
   --env-file /etc/yg-license-server/yg-license-server.env \
   -v /var/lib/yg-license-server:/data \
+  --entrypoint python \
   ghcr.io/why-gee/yg-license-server:latest \
-  python -m app.scripts.send_expiry_warnings
+  -m app.scripts.send_expiry_warnings
