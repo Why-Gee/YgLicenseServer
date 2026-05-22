@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app import webhooks
 from app._time import utcnow as _utcnow
+from app.license_keys import hash_key
 from app.models import Event, Install, License
 from app.security import is_safe_url_shape
 from app.services.errors import ServiceError
@@ -43,7 +44,7 @@ def check_license(
     """Validate a license + record a heartbeat. Caller passes in the hashed
     client IP (router computes it from request headers — kept out of services
     to keep them framework-free)."""
-    lic = db.query(License).filter_by(key=key).one_or_none()
+    lic = db.query(License).filter_by(key_hash=hash_key(key)).one_or_none()
     if lic is None:
         raise CheckRejected("invalid_key")
     if lic.status == "revoked":

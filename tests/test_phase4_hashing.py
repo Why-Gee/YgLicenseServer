@@ -190,3 +190,41 @@ def test_migration_backfills_key_hash_and_key_display(make_client, monkeypatch):
         lic = s.query(License).first()
         assert lic.key_hash == hash_key(plaintext)
         assert lic.key_display == make_display(plaintext)
+
+
+# ---------- /v1/check looks up by hash --------------------------------------
+
+
+def test_v1_check_succeeds_even_when_plaintext_column_is_wrong(make_client, monkeypatch):
+    """Tamper the plaintext `key` column on a license to a different value
+    but leave `key_hash` correct. /v1/check with the original plaintext
+    must still succeed — proving the lookup is via key_hash, not key."""
+    from cryptography.fernet import Fernet
+    c = make_client(
+        LICENSE_KEY_PEPPER="testpepper" * 4,
+        LICENSE_KEY_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+    )
+    r = c.post(
+        "/v1/admin/products",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"slug": "asm", "name": "ASM", "key_prefix": "asm"},
+    )
+    r = c.post(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"email": "alice@example.com", "plan": "standard", "valid_days": 30},
+    )
+    plaintext = r.json()["key"]
+
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        lic = s.query(License).first()
+        lic.key = "tampered_garbage_value"
+        s.commit()
+
+    r = c.post(
+        "/v1/check",
+        json={"key": plaintext, "install_id": "ii-1", "version": "1.0"},
+    )
+    assert r.status_code == 200, "lookup should succeed via key_hash, not key"
