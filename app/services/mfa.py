@@ -8,11 +8,14 @@ the plaintext). Single-row table, `id == 1` enforced by check constraint.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import secrets
 from dataclasses import dataclass
 
 import pyotp
+import qrcode
+import qrcode.image.svg
 from sqlalchemy.orm import Session
 
 from app._time import utcnow
@@ -29,6 +32,7 @@ RECOVERY_CODE_BYTES = 6  # ~12 hex chars => ~48 bits, plenty for one-use
 class EnrolStart:
     secret: str
     provisioning_uri: str
+    qr_svg: str  # inline SVG markup, ready to drop into a div via innerHTML
 
 
 def _row(db: Session) -> AdminMfa | None:
@@ -62,7 +66,16 @@ def start_enrol(db: Session) -> EnrolStart:
         row.recovery_codes_hashed = None
     db.commit()
     uri = pyotp.TOTP(secret).provisioning_uri(name=ACCOUNT, issuer_name=ISSUER)
-    return EnrolStart(secret=secret, provisioning_uri=uri)
+    return EnrolStart(secret=secret, provisioning_uri=uri, qr_svg=_qr_svg(uri))
+
+
+def _qr_svg(data: str) -> str:
+    """Render `data` as an inline-able SVG QR code. SvgPathImage avoids the
+    pillow dep (no raster, just <path> elements)."""
+    buf = io.BytesIO()
+    img = qrcode.make(data, image_factory=qrcode.image.svg.SvgPathImage)
+    img.save(buf)
+    return buf.getvalue().decode("utf-8")
 
 
 def verify_enrol(db: Session, code: str) -> list[str] | None:

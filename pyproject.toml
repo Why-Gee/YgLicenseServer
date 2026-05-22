@@ -1,6 +1,6 @@
 [project]
 name = "yg-license-server"
-version = "1.0.1"
+version = "1.0.2"
 description = "Self-hostable multi-product license server. Issues signed JWTs, handles Stripe webhooks, ships with an admin UI."
 requires-python = ">=3.12"
 dependencies = [
@@ -19,6 +19,8 @@ dependencies = [
     "httpx>=0.28",
     "slowapi>=0.1.9",
     "pyotp>=2.9",
+    # MFA enrolment QR code as inline SVG. No pillow needed for SvgPathImage.
+    "qrcode>=7.4",
 ]
 
 [project.optional-dependencies]

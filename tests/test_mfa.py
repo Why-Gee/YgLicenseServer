@@ -42,6 +42,15 @@ def test_mfa_enrol_returns_provisioning_uri(client):
     body = r.json()
     assert body["provisioning_uri"].startswith("otpauth://totp/"), body
     assert body["secret"] and re.match(r"^[A-Z2-7]+$", body["secret"]), body
+    # QR code surfaces as inline SVG so the admin doesn't have to copy the
+    # otpauth URI into their phone by hand. Round-trip decode would need a
+    # raster lib + zbar; we just check the markup is plausible SVG.
+    assert "qr_svg" in body, body
+    svg = body["qr_svg"]
+    assert svg.startswith("<?xml") or svg.startswith("<svg"), (
+        f"qr_svg should be SVG markup; got prefix {svg[:80]!r}"
+    )
+    assert "</svg>" in svg, "qr_svg missing closing tag"
     # not enabled yet — must verify with one OTP first
     from app.db import SessionLocal
     from app.models import AdminMfa
