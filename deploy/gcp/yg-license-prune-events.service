@@ -8,8 +8,11 @@ Type=oneshot
 # Runs python -m app.scripts.prune_events inside the same container image
 # the server runs. `docker run --rm` so it doesn't tangle with the live
 # service; mounts the same data volume so it sees the same SQLite DB.
+# --entrypoint python overrides the image's docker-entrypoint.sh which
+# would otherwise prepend `uvicorn app.main:app ...` and trip on `-m`.
 ExecStart=/usr/bin/docker run --rm \
   --env-file /etc/yg-license-server/yg-license-server.env \
   -v /var/lib/yg-license-server:/data \
+  --entrypoint python \
   ghcr.io/why-gee/yg-license-server:latest \
-  python -m app.scripts.prune_events
+  -m app.scripts.prune_events
