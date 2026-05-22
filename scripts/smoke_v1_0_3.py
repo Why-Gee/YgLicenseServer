@@ -16,7 +16,6 @@ Run:  .venv/Scripts/python.exe scripts/smoke_v1_0_3.py
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -148,8 +147,12 @@ with httpx.Client(timeout=30.0, follow_redirects=False) as c:
                 ok("license revoked (will be cleaned via psql after smoke)")
             else:
                 print(f"  warn: revoke returned {r.status_code} {r.text}", file=sys.stderr)
-        print(f"\nNOTE: throwaway product '{SLUG}' left behind. Clean via:")
-        print(f"  gcloud compute ssh yg-license-server --zone=us-west1-a --command=\\")
-        print(f"    \"docker exec yg-license-server-db-1 psql -U ygls -d ygls -c \\\"DELETE FROM products WHERE slug='{SLUG}';\\\"\"")
+        print(f"\nNOTE: throwaway product '{SLUG}' left behind. Clean via sqlite3 on the VM:")
+        print(
+            "  gcloud compute ssh yg-license-server --zone=us-west1-a"
+            " --ssh-flag=-t --command='sudo sqlite3"
+            " /var/lib/yg-license-server/license.db"
+            f' \\"DELETE FROM products WHERE slug=\\\'\'{SLUG}\\\'\';\\"\''
+        )
 
 print("\n[OK] v1.0.3 smoke green")
