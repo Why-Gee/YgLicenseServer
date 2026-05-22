@@ -33,6 +33,7 @@ def upgraded_db_url(tmp_path, monkeypatch) -> str:
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.setenv("ADMIN_TOKEN", "x")
     monkeypatch.setenv("SESSION_SECRET", "y")
+    monkeypatch.setenv("LICENSE_KEY_PEPPER", "migration_test_pepper_" + "x" * 32)
 
     import app.config as cfg
     importlib.reload(cfg)
@@ -180,6 +181,7 @@ def test_license_delete_cascades_installs(upgraded_db_url: str) -> None:
 
     from sqlalchemy.orm import Session
 
+    from app.license_keys import hash_key, make_display
     from app.models import Customer, Install, License, Product
     from app.signing import generate_keypair
     engine = create_engine(upgraded_db_url)
@@ -193,9 +195,12 @@ def test_license_delete_cascades_installs(upgraded_db_url: str) -> None:
         c = Customer(email="x@example.com")
         s.add_all([p, c])
         s.commit()
+        key = f"t_{secrets.token_urlsafe(16)}"
         lic = License(
             product_id=p.id, customer_id=c.id,
-            key=f"t_{secrets.token_urlsafe(16)}",
+            key=key,
+            key_hash=hash_key(key),
+            key_display=make_display(key),
             plan="standard", max_users=1, features={},
             valid_until=datetime.now(UTC).replace(tzinfo=None) + timedelta(days=1),
             status="active",

@@ -23,6 +23,7 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
         "ADMIN_TOKEN": "test-admin",
         "SESSION_SECRET": "test-session",
         "COOKIE_SECURE": "false",
+        "LICENSE_KEY_PEPPER": "phase4_test_pepper_" + "x" * 32,
     }
     base.update(env)
     for k, v in base.items():

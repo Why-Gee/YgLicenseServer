@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app import webhooks as wh
 from app._time import utcnow as _utcnow
+from app.license_keys import hash_key, make_display
 from app.models import Customer, Event, Install, License, Product
 from app.security import is_safe_url_shape
 from app.services.errors import Unsafe, ValidationFailed
@@ -94,7 +95,9 @@ def issue_license(
     lic = License(
         product_id=product.id,
         customer_id=cust.id,
-        key=key,
+        key=key,                           # deprecated; will drop in v1.1
+        key_hash=hash_key(key),
+        key_display=make_display(key),
         plan=plan,
         max_users=max_users,
         features=features or {},

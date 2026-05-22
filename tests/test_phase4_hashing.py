@@ -123,3 +123,70 @@ def test_license_model_has_key_hash_and_key_display_columns(monkeypatch):
     cols = {c.name for c in app.models.License.__table__.columns}
     assert "key_hash" in cols
     assert "key_display" in cols
+
+
+# ---------- issuance writes hash + display ----------------------------------
+
+
+def test_admin_issue_populates_hash_and_display(make_client, monkeypatch):
+    from cryptography.fernet import Fernet
+    c = make_client(
+        LICENSE_KEY_PEPPER="testpepper" * 4,
+        LICENSE_KEY_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+    )
+    r = c.post(
+        "/v1/admin/products",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"slug": "asm", "name": "ASM", "key_prefix": "asm"},
+    )
+    assert r.status_code == 200
+    r = c.post(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"email": "alice@example.com", "plan": "standard", "valid_days": 30},
+    )
+    assert r.status_code == 200
+    plaintext = r.json()["key"]
+    assert plaintext.startswith("asm_")
+    from app.db import SessionLocal
+    from app.models import License
+    from app.license_keys import hash_key, make_display
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=r.json()["license_id"]).one()
+        assert lic.key_hash == hash_key(plaintext)
+        assert lic.key_display == make_display(plaintext)
+        assert lic.key == plaintext  # plaintext STILL stored in v1.0 (deprecated)
+
+
+def test_migration_backfills_key_hash_and_key_display(make_client, monkeypatch):
+    """After upgrade, every existing license row has key_hash + key_display
+    populated from the plaintext key (using the configured pepper)."""
+    from cryptography.fernet import Fernet
+    monkeypatch.setenv("LICENSE_KEY_PEPPER", "deadbeef" * 4)
+    monkeypatch.setenv("LICENSE_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    c = make_client(
+        LICENSE_KEY_PEPPER="deadbeef" * 4,
+        LICENSE_KEY_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+    )
+    # Issue a license so we have a row in the table.
+    r = c.post(
+        "/v1/admin/products",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"slug": "asm", "name": "ASM", "key_prefix": "asm"},
+    )
+    assert r.status_code == 200
+    r = c.post(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"email": "alice@example.com", "plan": "standard", "valid_days": 30},
+    )
+    assert r.status_code == 200
+    plaintext = r.json()["key"]
+    # Confirm the row has hash + display populated.
+    from app.db import SessionLocal
+    from app.models import License
+    from app.license_keys import hash_key, make_display
+    with SessionLocal() as s:
+        lic = s.query(License).first()
+        assert lic.key_hash == hash_key(plaintext)
+        assert lic.key_display == make_display(plaintext)
