@@ -33,6 +33,7 @@ def license_issue(
     valid_days: int = Form(365),
     features_json: str = Form("{}"),
     webhook_url: str = Form(""),
+    allow_http_webhook: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ) -> Response:
@@ -56,6 +57,7 @@ def license_issue(
             plan=plan, max_users=max_users, valid_days=valid_days,
             features=features,
             webhook_url=webhook_url or None,
+            allow_http_webhook=(allow_http_webhook == "1"),
             note="ui/issue",
         )
     except Unsafe as e:
@@ -77,6 +79,7 @@ def license_edit(
     valid_until: str = Form(...),
     features_json: str = Form("{}"),
     webhook_url: str = Form(""),
+    allow_http_webhook: str = Form(""),
     rotate_secret: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
@@ -98,6 +101,7 @@ def license_edit(
             plan=plan, max_users=max_users, valid_until_raw=valid_until,
             features_json=features_json,
             webhook_url=webhook_url,
+            allow_http_webhook=(allow_http_webhook == "1") if allow_http_webhook else None,
             rotate_secret=rotate_secret == "1",
             note="ui/edit",
             schedule=bg.add_task,
@@ -119,6 +123,7 @@ def license_webhook_update(
     lid: str,
     request: Request,
     webhook_url: str = Form(""),
+    allow_http_webhook: str = Form(""),
     rotate_secret: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
@@ -134,7 +139,9 @@ def license_webhook_update(
     try:
         licenses_svc.configure_webhook(
             db, lic, url=new_url, rotate=rotate_secret == "1",
-            mint_on_url_change=True, note="ui/webhook",
+            mint_on_url_change=True,
+            allow_http=(allow_http_webhook == "1"),
+            note="ui/webhook",
         )
     except Unsafe as e:
         return RedirectResponse(

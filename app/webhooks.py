@@ -58,7 +58,7 @@ import httpx
 
 from app._time import utcnow
 from app.http_client import get_client
-from app.security import resolve_safe_address
+from app.security import is_safe_url_shape, resolve_safe_address
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -104,6 +104,7 @@ def deliver(
     timeout: float = 5.0,
     event_id: str | None = None,
     timestamp: int | None = None,
+    allow_http: bool = False,
 ) -> tuple[bool, int | None, str | None]:
     """POST a signed event to url. Returns (ok, http_status, error_msg).
 
@@ -123,8 +124,16 @@ def deliver(
     `event_id` + `timestamp` are passed through when retrying a previously-
     enqueued delivery so the receiver-side dedup-by-event-id keeps working
     across retries.
+
+    `allow_http` controls the URL-shape check at the per-call boundary.
+    Defaults to False (HTTPS-only) to match the safer per-license default;
+    callers with a license that has allow_http_webhook=True pass True.
     """
-    resolved = resolve_safe_address(url, allow_http=True)
+    ok_url = is_safe_url_shape(url, allow_http=allow_http)
+    if not ok_url:
+        log.warning("webhook refused (unsafe url shape): %s", url)
+        return False, None, "refused:unsafe_url_shape"
+    resolved = resolve_safe_address(url, allow_http=allow_http)
     if resolved is None:
         # resolve_safe_address already logged the specific reason (shape /
         # dns_failed / all_private) at WARNING level.
@@ -199,6 +208,7 @@ def deliver_status_change(
     return deliver(
         url=license_obj.webhook_url, secret=license_obj.webhook_secret,
         event_type=EVENT_STATUS_CHANGED, data=data,
+        allow_http=bool(license_obj.allow_http_webhook),
     )
 
 
@@ -223,6 +233,7 @@ def deliver_update(
     return deliver(
         url=license_obj.webhook_url, secret=license_obj.webhook_secret,
         event_type=EVENT_UPDATED, data=data,
+        allow_http=bool(license_obj.allow_http_webhook),
     )
 
 
@@ -231,7 +242,9 @@ def deliver_deleted(
     webhook_url: str, webhook_secret: str,
 ) -> tuple[bool, int | None, str | None]:
     """For deletions, the License row is gone by the time this fires, so the
-    caller passes the snapshot fields directly."""
+    caller passes the snapshot fields directly. The allow_http flag is inferred
+    from the stored URL's scheme — the URL was validated at configure time so
+    if it starts with http:// the flag must have been True then."""
     data = {
         "license_id": license_id,
         "license_key": key,
@@ -242,6 +255,7 @@ def deliver_deleted(
     return deliver(
         url=webhook_url, secret=webhook_secret,
         event_type=EVENT_DELETED, data=data,
+        allow_http=webhook_url.startswith("http://"),
     )
 
 
@@ -279,7 +293,7 @@ def try_deliver(db: Session, delivery_id: str) -> bool:
     exhausted. Caller owns the commit.
 
     Returns True iff the row transitioned to 'delivered'."""
-    from app.models import WebhookDelivery
+    from app.models import License, WebhookDelivery
     d = db.query(WebhookDelivery).filter_by(id=delivery_id).one_or_none()
     if d is None or d.status != "pending":
         return False
@@ -289,6 +303,16 @@ def try_deliver(db: Session, delivery_id: str) -> bool:
         d.status = "abandoned"
         d.last_error = f"payload_decode: {e}"
         return False
+    # Live license carries the allow_http flag. If the license is gone
+    # (delete-cascade fired this delivery), fall back to inferring from
+    # the stored URL's scheme.
+    allow_http = False
+    if d.license_id:
+        lic = db.query(License).filter_by(id=d.license_id).one_or_none()
+        if lic is not None:
+            allow_http = bool(lic.allow_http_webhook)
+    if not allow_http:
+        allow_http = d.url.startswith("http://")
     # Resign fresh on each attempt so receiver-side replay windows (5min
     # default) don't reject a backed-off retry. Receiver dedups on the
     # X-License-Server-Event-Id header which we DON'T regenerate -- so
@@ -296,6 +320,7 @@ def try_deliver(db: Session, delivery_id: str) -> bool:
     ok, status, err = deliver(
         url=d.url, secret=d.secret, event_type=d.event_type, data=data,
         event_id=d.id,
+        allow_http=allow_http,
     )
     d.attempts += 1
     d.last_attempt_at = utcnow()

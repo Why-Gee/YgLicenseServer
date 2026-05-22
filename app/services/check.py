@@ -57,7 +57,9 @@ def check_license(
     # only when changed so we don't churn the row on every heartbeat.
     if public_url is not None and public_url.strip():
         candidate = public_url.strip().rstrip("/")
-        if len(candidate) > 500 or not is_safe_url_shape(candidate, allow_http=True):
+        if len(candidate) > 500 or not is_safe_url_shape(
+            candidate, allow_http=bool(lic.allow_http_webhook),
+        ):
             raise CheckRejected("invalid_public_url", http_status=400)
         if lic.webhook_url != candidate:
             # Admin-managed URLs are locked against /v1/check overrides.

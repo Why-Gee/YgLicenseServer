@@ -145,6 +145,13 @@ class License(Base):
     webhook_url_source: Mapped[str] = mapped_column(
         String(16), default="self", nullable=False,
     )
+    # Per-license http:// opt-in. When True, webhook URLs may use the http
+    # scheme (intended for customer-LAN installs). Default False; HTTPS-only
+    # is the safe default. Migration backfills True for existing rows whose
+    # webhook_url already starts with http:// so behaviour doesn't regress.
+    allow_http_webhook: Mapped[bool] = mapped_column(
+        Integer, default=0, nullable=False,
+    )
 
     product: Mapped[Product] = relationship(back_populates="licenses")
     customer: Mapped[Customer] = relationship(back_populates="licenses")

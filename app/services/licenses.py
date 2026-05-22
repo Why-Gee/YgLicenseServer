@@ -56,6 +56,7 @@ def issue_license(
     valid_days: int = 365,
     features: dict | None = None,
     webhook_url: str | None = None,
+    allow_http_webhook: bool = False,
     stripe_customer_id: str | None = None,
     note: str = "service/issue",
     send_email: bool = False,
@@ -82,7 +83,9 @@ def issue_license(
     # caller's `name=...` is silently ignored in this branch by design.
 
     webhook_url_clean = (webhook_url or "").strip() or None
-    if webhook_url_clean and not is_safe_url_shape(webhook_url_clean, allow_http=True):
+    if webhook_url_clean and not is_safe_url_shape(
+        webhook_url_clean, allow_http=allow_http_webhook,
+    ):
         raise Unsafe("unsafe webhook url")
     webhook_secret_value = wh.generate_secret() if webhook_url_clean else None
     webhook_source_value = "admin" if webhook_url_clean else "self"
@@ -100,6 +103,7 @@ def issue_license(
         webhook_url=webhook_url_clean,
         webhook_secret=webhook_secret_value,
         webhook_url_source=webhook_source_value,
+        allow_http_webhook=1 if allow_http_webhook else 0,
     )
     db.add(lic)
     db.add(Event(
@@ -181,6 +185,7 @@ def enable_license(db: Session, lic: License, *, note: str = "service/enable",
 def apply_webhook_config(
     lic: License, *, url: str | None, rotate: bool, mint_on_url_change: bool,
     source: str = "admin",
+    allow_http: bool | None = None,
 ) -> None:
     """Mutate `lic.webhook_url` + `lic.webhook_secret` + `lic.webhook_url_source`
     per rotate semantics.
@@ -194,10 +199,18 @@ def apply_webhook_config(
       - the license has no secret yet (first-time set), OR
       - `mint_on_url_change=True` AND the URL actually changed.
 
+    `allow_http` (when not None) overrides `lic.allow_http_webhook` for the
+    validation check; None means use whatever is already on the row. Caller
+    passes True to flip the row's flag to True alongside setting an http URL;
+    None preserves the existing flag value.
+
     `url=None` clears all three fields. Caller commits.
     """
     if url:
-        if not is_safe_url_shape(url, allow_http=True):
+        effective_allow_http = (
+            allow_http if allow_http is not None else bool(lic.allow_http_webhook)
+        )
+        if not is_safe_url_shape(url, allow_http=effective_allow_http):
             raise Unsafe("unsafe webhook url")
         should_mint = (
             rotate
@@ -208,10 +221,13 @@ def apply_webhook_config(
             lic.webhook_secret = wh.generate_secret()
         lic.webhook_url = url
         lic.webhook_url_source = source
+        if allow_http is not None:
+            lic.allow_http_webhook = 1 if allow_http else 0
     else:
         lic.webhook_url = None
         lic.webhook_secret = None
         lic.webhook_url_source = "self"
+        lic.allow_http_webhook = 0
 
 
 @dataclass(frozen=True)
@@ -227,6 +243,7 @@ def edit_license(
     valid_until_raw: str,
     features_json: str = "{}",
     webhook_url: str = "",
+    allow_http_webhook: bool | None = None,
     rotate_secret: bool = False,
     note: str = "service/edit",
     schedule: Scheduler | None = None,
@@ -270,7 +287,10 @@ def edit_license(
 
     new_url = webhook_url.strip() or None
     prev_secret = lic.webhook_secret
-    apply_webhook_config(lic, url=new_url, rotate=rotate_secret, mint_on_url_change=True)
+    apply_webhook_config(
+        lic, url=new_url, rotate=rotate_secret, mint_on_url_change=True,
+        allow_http=allow_http_webhook,
+    )
     secret_changed = lic.webhook_secret != prev_secret
 
     db.add(Event(
@@ -307,6 +327,7 @@ def configure_webhook(
     rotate: bool,
     mint_on_url_change: bool = True,
     source: str = "admin",
+    allow_http: bool | None = None,
     note: str = "service/webhook",
     payload_extra: dict | None = None,
 ) -> None:
@@ -320,7 +341,10 @@ def configure_webhook(
     the URL implicitly rotates the secret). The JSON API path uses False so
     callers control rotation explicitly.
     """
-    apply_webhook_config(lic, url=url, rotate=rotate, mint_on_url_change=mint_on_url_change, source=source)
+    apply_webhook_config(
+        lic, url=url, rotate=rotate, mint_on_url_change=mint_on_url_change,
+        source=source, allow_http=allow_http,
+    )
     payload = {"set": bool(url)}
     if payload_extra:
         payload.update(payload_extra)
@@ -352,6 +376,7 @@ def test_webhook(lic: License) -> WebhookTestResult:
             "customer_email": lic.customer.email,
             "test": True,
         },
+        allow_http=bool(lic.allow_http_webhook),
     )
     return WebhookTestResult(ok=ok, status=status, error=err)
 

@@ -286,6 +286,7 @@ def admin_list_licenses(
                 "created_at": r.created_at.isoformat(),
                 "webhook_url": r.webhook_url,
                 "webhook_url_source": r.webhook_url_source,
+                "allow_http_webhook": bool(r.allow_http_webhook),
             }
             for r in page.items
         ],
