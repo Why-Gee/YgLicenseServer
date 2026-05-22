@@ -55,7 +55,7 @@ def test_check_jwt_signed_with_correct_product_key(client: TestClient) -> None:
     key = _issue(client)
     r = client.post("/v1/check", json={"key": key, "install_id": "i1", "version": "1.0.0"})
     token = r.json()["jwt"]
-    claims = jwt_lib.decode(token, pub, algorithms=["EdDSA"], options={"verify_exp": False})
+    claims = jwt_lib.decode(token, pub, algorithms=["EdDSA"], audience="asm", options={"verify_exp": False})
     assert claims["product"] == "asm"
     assert claims["plan"] == "standard"
 
@@ -100,12 +100,12 @@ def test_two_products_isolated(client: TestClient) -> None:
     token = r.json()["jwt"]
 
     # Verifies under asm pubkey
-    claims = jwt_lib.decode(token, asm_pub, algorithms=["EdDSA"], options={"verify_exp": False})
+    claims = jwt_lib.decode(token, asm_pub, algorithms=["EdDSA"], audience="asm", options={"verify_exp": False})
     assert claims["product"] == "asm"
 
     # Fails under other pubkey
     with pytest.raises(jwt_lib.InvalidSignatureError):
-        jwt_lib.decode(token, other_pub, algorithms=["EdDSA"], options={"verify_exp": False})
+        jwt_lib.decode(token, other_pub, algorithms=["EdDSA"], audience="asm", options={"verify_exp": False})
 
 
 def test_duplicate_slug_rejected(client: TestClient) -> None:

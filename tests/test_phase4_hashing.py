@@ -287,3 +287,36 @@ def test_csv_export_uses_key_display(make_client, monkeypatch):
     body = r.text
     assert plaintext not in body, "plaintext leaked into CSV export"
     assert "…" in body, "key_display not present in CSV export"
+
+
+# ---------- JWT aud claim ---------------------------------------------------
+
+
+def test_jwt_carries_aud_claim(make_client, monkeypatch):
+    """v1.0+: JWT payload includes aud = product.slug. Clients MUST pass
+    audience= to jwt.decode or set verify_aud=False."""
+    from cryptography.fernet import Fernet
+    c = make_client(
+        LICENSE_KEY_PEPPER="testpepper" * 4,
+        LICENSE_KEY_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+    )
+    r = c.post(
+        "/v1/admin/products",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"slug": "asm", "name": "ASM", "key_prefix": "asm"},
+    )
+    r = c.post(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"email": "alice@example.com", "plan": "standard", "valid_days": 30},
+    )
+    plaintext = r.json()["key"]
+    r = c.post(
+        "/v1/check",
+        json={"key": plaintext, "install_id": "ii-1", "version": "1.0"},
+    )
+    assert r.status_code == 200
+    token = r.json()["jwt"]
+    import jwt as pyjwt
+    claims = pyjwt.decode(token, options={"verify_signature": False})
+    assert claims.get("aud") == "asm", claims
