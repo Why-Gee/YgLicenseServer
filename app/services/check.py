@@ -60,6 +60,19 @@ def check_license(
         if len(candidate) > 500 or not is_safe_url_shape(candidate, allow_http=True):
             raise CheckRejected("invalid_public_url", http_status=400)
         if lic.webhook_url != candidate:
+            # Admin-managed URLs are locked against /v1/check overrides.
+            if lic.webhook_url_source == "admin":
+                log.warning(
+                    "license %s refused public_url override of admin-set URL", lic.id,
+                )
+                db.add(Event(
+                    license_id=lic.id, product_id=lic.product_id,
+                    type="webhook:override_refused",
+                    payload={"attempted_url": candidate, "kept_url": lic.webhook_url},
+                    note="service/check",
+                ))
+                db.commit()
+                raise CheckRejected("webhook_url_locked", http_status=409)
             log.info("license %s webhook_url updated to %s", lic.id, candidate)
             db.add(Event(
                 license_id=lic.id, product_id=lic.product_id,
@@ -72,11 +85,12 @@ def check_license(
                 note="service/check",
             ))
             lic.webhook_url = candidate
-
-    # Lazy-mint webhook_secret. Receivers need it to verify inbound pushes,
-    # self-registering installs can't bootstrap one any other way.
-    if not lic.webhook_secret:
-        lic.webhook_secret = webhooks.generate_secret()
+            lic.webhook_url_source = "self"
+            # First time the customer self-registers → mint a secret so the
+            # response can carry it. Re-self-registration of the same URL
+            # leaves the existing secret in place.
+            if not lic.webhook_secret:
+                lic.webhook_secret = webhooks.generate_secret()
 
     install = (
         db.query(Install)

@@ -149,29 +149,39 @@ def _read_license(key: str):
 
 
 def test_check_returns_webhook_secret(client: TestClient) -> None:
+    """Secret is returned only when client self-registers a URL via public_url."""
     _create_product(client)
     key = _issue(client)
+    # No public_url → no secret returned (lazy-mint removed per Vuln 1 fix).
     r = client.post("/v1/check", json={"key": key, "install_id": "i1", "version": "1.0.0"})
     assert r.status_code == 200
     body = r.json()
-    assert "webhook_secret" in body
-    assert body["webhook_secret"].startswith("whsec_")
+    assert body.get("webhook_secret") in (None, "")
+    # Self-register via public_url → secret is now present.
+    r2 = client.post("/v1/check", json={
+        "key": key, "install_id": "i1", "version": "1.0.0",
+        "public_url": "https://tenant.example/wh",
+    })
+    assert r2.status_code == 200
+    assert r2.json()["webhook_secret"].startswith("whsec_")
 
 
-def test_check_mints_webhook_secret_when_absent(client: TestClient) -> None:
-    """First /v1/check on a license without a webhook_secret must mint one
-    and persist it. A second call returns the same value (idempotent)."""
+def test_check_no_secret_without_url(client: TestClient) -> None:
+    """A license with no webhook URL must NOT receive a lazy-minted secret on
+    /v1/check. Replaces test_check_mints_webhook_secret_when_absent which
+    relied on the removed lazy-mint behaviour."""
     _create_product(client)
     key = _issue(client)
     assert _read_license(key).webhook_secret is None
 
     r1 = client.post("/v1/check", json={"key": key, "install_id": "i1", "version": "1.0.0"})
-    s1 = r1.json()["webhook_secret"]
-    assert s1.startswith("whsec_")
-    assert _read_license(key).webhook_secret == s1
+    assert r1.json().get("webhook_secret") in (None, "")
+    # DB row must also stay secret-free.
+    assert _read_license(key).webhook_secret is None
 
+    # Second call is equally absent.
     r2 = client.post("/v1/check", json={"key": key, "install_id": "i1", "version": "1.0.0"})
-    assert r2.json()["webhook_secret"] == s1
+    assert r2.json().get("webhook_secret") in (None, "")
 
 
 def test_check_upserts_public_url(client: TestClient) -> None:

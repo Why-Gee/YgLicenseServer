@@ -113,6 +113,10 @@ class License(Base):
             f"status IN {LICENSE_STATUSES!r}",
             name="ck_licenses_status",
         ),
+        CheckConstraint(
+            "webhook_url_source IN ('admin','self')",
+            name="ck_licenses_webhook_url_source",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -133,6 +137,14 @@ class License(Base):
     # the customer react to admin actions instantly instead of polling.
     webhook_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     webhook_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Provenance of webhook_url: 'admin' = set via admin UI / JSON API (locked
+    # against /v1/check overrides); 'self' = set by the license holder via
+    # /v1/check public_url (freely updatable). Enforced by
+    # ck_licenses_webhook_url_source. Default 'self' so un-migrated rows and
+    # new licenses without a URL start in the self-register-allowed state.
+    webhook_url_source: Mapped[str] = mapped_column(
+        String(16), default="self", nullable=False,
+    )
 
     product: Mapped[Product] = relationship(back_populates="licenses")
     customer: Mapped[Customer] = relationship(back_populates="licenses")

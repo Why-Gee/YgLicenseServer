@@ -85,6 +85,7 @@ def issue_license(
     if webhook_url_clean and not is_safe_url_shape(webhook_url_clean, allow_http=True):
         raise Unsafe("unsafe webhook url")
     webhook_secret_value = wh.generate_secret() if webhook_url_clean else None
+    webhook_source_value = "admin" if webhook_url_clean else "self"
 
     key = f"{product.key_prefix}_" + secrets.token_urlsafe(32)
     lic = License(
@@ -98,6 +99,7 @@ def issue_license(
         status="active",
         webhook_url=webhook_url_clean,
         webhook_secret=webhook_secret_value,
+        webhook_url_source=webhook_source_value,
     )
     db.add(lic)
     db.add(Event(
@@ -177,19 +179,25 @@ def enable_license(db: Session, lic: License, *, note: str = "service/enable",
 
 
 def apply_webhook_config(
-    lic: License, *, url: str | None, rotate: bool, mint_on_url_change: bool
+    lic: License, *, url: str | None, rotate: bool, mint_on_url_change: bool,
+    source: str = "admin",
 ) -> None:
-    """Mutate `lic.webhook_url` + `lic.webhook_secret` per rotate semantics.
+    """Mutate `lic.webhook_url` + `lic.webhook_secret` + `lic.webhook_url_source`
+    per rotate semantics.
+
+    `source` records who wrote the URL: 'admin' for admin UI / JSON API,
+    'self' for /v1/check self-registration. /v1/check refuses overrides
+    against rows whose source is 'admin'.
 
     Mints a fresh secret when:
       - `rotate=True` (caller explicitly asked), OR
       - the license has no secret yet (first-time set), OR
       - `mint_on_url_change=True` AND the URL actually changed.
 
-    `url=None` clears both fields. Caller commits.
+    `url=None` clears all three fields. Caller commits.
     """
     if url:
-        if url and not is_safe_url_shape(url, allow_http=True):
+        if not is_safe_url_shape(url, allow_http=True):
             raise Unsafe("unsafe webhook url")
         should_mint = (
             rotate
@@ -199,9 +207,11 @@ def apply_webhook_config(
         if should_mint:
             lic.webhook_secret = wh.generate_secret()
         lic.webhook_url = url
+        lic.webhook_url_source = source
     else:
         lic.webhook_url = None
         lic.webhook_secret = None
+        lic.webhook_url_source = "self"
 
 
 @dataclass(frozen=True)

@@ -61,9 +61,9 @@ class CheckOut(BaseModel):
     max_users: int
     license_id: str
     product: str
-    # HMAC signing key for inbound webhooks. Auto-minted on first /v1/check
-    # if absent so the receiver always has something to verify with.
-    webhook_secret: str
+    # Only present when the URL is self-registered (source='self'); admin-set
+    # URLs do not expose the secret over /v1/check.
+    webhook_secret: str | None = None
 
 
 def _client_ip_hash(request: Request) -> str | None:
@@ -112,7 +112,9 @@ def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> Che
         max_users=lic.max_users,
         license_id=lic.id,
         product=lic.product.slug,
-        webhook_secret=lic.webhook_secret,
+        webhook_secret=(
+            lic.webhook_secret if lic.webhook_url_source == "self" else None
+        ),
     )
 
 
@@ -293,6 +295,8 @@ def admin_list_licenses(
                 "valid_until": r.valid_until.isoformat(),
                 "customer": r.customer.email, "customer_name": r.customer.name,
                 "created_at": r.created_at.isoformat(),
+                "webhook_url": r.webhook_url,
+                "webhook_url_source": r.webhook_url_source,
             }
             for r in page.items
         ],

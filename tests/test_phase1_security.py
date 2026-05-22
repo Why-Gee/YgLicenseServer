@@ -261,6 +261,141 @@ def test_webhook_delivery_pins_resolved_ip(client, monkeypatch):
     assert req["headers"].get("host") == "customer.example.com", req["headers"]
 
 
+# ---------- Vuln 1: webhook hijack + secret leak ---------------------------
+
+
+def test_v1check_does_not_overwrite_admin_set_webhook_url(client):
+    """A license-key holder calling /v1/check with public_url must NOT
+    silently overwrite a webhook_url set by the admin."""
+    _create_product(client)
+    cookies = _admin_login(client)
+    # Admin issues a license + sets the webhook URL.
+    r = _form_post(
+        client, "/admin/products/asm/licenses", cookies,
+        data={
+            "email": "alice@example.com", "plan": "standard",
+            "max_users": "10", "valid_days": "30", "features_json": "{}",
+            "webhook_url": "https://admin.example.com/notify",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    # Grab the issued key from the admin product-detail page (licenses are
+    # rendered there). Cheapest path: the JSON admin API.
+    r = client.get(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+    )
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert items, r.json()
+    key = items[0]["key"]
+    # Now an attacker holding the key tries to redirect the webhook.
+    r = client.post(
+        "/v1/check",
+        json={
+            "key": key, "install_id": "ii-1", "version": "1.0",
+            "public_url": "https://attacker.tld/sink",
+        },
+    )
+    # The response must be a refusal (409 — locked) OR a 200 with the URL
+    # unchanged. The spec picks 409 for clarity.
+    assert r.status_code == 409, r.text
+    # Re-fetch the license; URL must still be the admin one.
+    r = client.get(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+    )
+    items = r.json()["items"]
+    assert items[0].get("webhook_url") == "https://admin.example.com/notify"
+
+
+def test_v1check_secret_not_returned_when_admin_set(client):
+    """When the webhook URL was set by the admin, /v1/check must NOT
+    include webhook_secret in the response — only the original receiver
+    (the customer's HTTP receiver) should have learned the secret, via
+    the one-time-display in the admin UI."""
+    _create_product(client)
+    cookies = _admin_login(client)
+    _ = _form_post(
+        client, "/admin/products/asm/licenses", cookies,
+        data={
+            "email": "alice@example.com", "plan": "standard",
+            "max_users": "10", "valid_days": "30", "features_json": "{}",
+            "webhook_url": "https://customer.example.com/wh",
+        },
+        follow_redirects=False,
+    )
+    r = client.get(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+    )
+    key = r.json()["items"][0]["key"]
+    r = client.post(
+        "/v1/check",
+        json={"key": key, "install_id": "ii-1", "version": "1.0"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json().get("webhook_secret") in (None, "")
+
+
+def test_v1check_self_registered_flow_still_works(client):
+    """A license issued WITHOUT a webhook can still self-register via
+    /v1/check; secret is returned so the customer's app can verify
+    incoming webhooks."""
+    _create_product(client)
+    cookies = _admin_login(client)
+    _ = _form_post(
+        client, "/admin/products/asm/licenses", cookies,
+        data={
+            "email": "alice@example.com", "plan": "standard",
+            "max_users": "10", "valid_days": "30", "features_json": "{}",
+        },
+        follow_redirects=False,
+    )
+    r = client.get(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+    )
+    key = r.json()["items"][0]["key"]
+    r = client.post(
+        "/v1/check",
+        json={
+            "key": key, "install_id": "ii-1", "version": "1.0",
+            "public_url": "https://customer.example.com/wh",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json().get("webhook_secret"), r.json()
+
+
+def test_v1check_does_not_mint_secret_when_no_url(client):
+    """A license with no webhook URL must NOT receive a lazy-minted secret
+    on /v1/check; the secret only exists alongside a real URL."""
+    _create_product(client)
+    cookies = _admin_login(client)
+    _ = _form_post(
+        client, "/admin/products/asm/licenses", cookies,
+        data={
+            "email": "alice@example.com", "plan": "standard",
+            "max_users": "10", "valid_days": "30", "features_json": "{}",
+        },
+        follow_redirects=False,
+    )
+    r = client.get(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+    )
+    key = r.json()["items"][0]["key"]
+    r = client.post(
+        "/v1/check",
+        json={"key": key, "install_id": "ii-1", "version": "1.0"},
+    )
+    assert r.status_code == 200
+    # No URL -> no secret in response.
+    assert r.json().get("webhook_secret") in (None, "")
+
+
 def test_webhook_refused_when_dns_resolves_only_to_private(client, monkeypatch):
     """If every A/AAAA the hostname returns is private/loopback/link-local,
     deliver must refuse before opening any socket."""
