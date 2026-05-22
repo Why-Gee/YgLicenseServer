@@ -107,4 +107,8 @@ def logout(request: Request, csrf_token: str = Form("")) -> Response:
     require_csrf(request, csrf_token)
     resp = RedirectResponse("/admin/login", status_code=303)
     resp.delete_cookie(SESSION_COOKIE)
+    # Belt-and-braces: if logout fires mid-MFA-flow, kill the pre-MFA
+    # cookie too so a stale one can't sit on the client for up to 5
+    # minutes after the user explicitly logged out.
+    resp.delete_cookie(PRE_MFA_COOKIE)
     return resp

@@ -249,3 +249,38 @@ def test_login_mfa_step_rejects_bad_code(client):
     # Stays on the MFA step with an error flag.
     assert r.status_code == 303
     assert r.headers["location"].startswith("/admin/login/mfa")
+
+
+def test_pre_mfa_cookie_alone_cannot_access_admin(client):
+    """A user who only holds the pre-MFA cookie must not be able to reach
+    any /admin/* page. The bootstrap-bypass property is structurally
+    enforced (logged_in() reads only SESSION_COOKIE), but a future change
+    to require_login or logged_in could silently break it — this test
+    catches the regression."""
+    cookies = _login(client)
+    r = _post(client, "/admin/mfa/enroll", cookies)
+    secret = r.json()["secret"]
+    _post(client, "/admin/mfa/verify-enroll", cookies, data={"code": pyotp.TOTP(secret).now()})
+    client.cookies.clear()
+    r = client.post("/admin/login", data={"token": "test-admin"}, follow_redirects=False)
+    pre_cookie = {"ls_pre_mfa": r.cookies["ls_pre_mfa"]}
+    r = client.get("/admin", cookies=pre_cookie, follow_redirects=False)
+    assert r.status_code == 303
+    assert "/admin/login" in r.headers["location"]
+
+
+def test_logout_deletes_pre_mfa_cookie(client):
+    """Logout must clear the pre-MFA cookie too. Otherwise a stale
+    cookie could sit on the client for up to 5 minutes after explicit
+    logout."""
+    cookies = _login(client)
+    r = _post(client, "/admin/mfa/enroll", cookies)
+    secret = r.json()["secret"]
+    _post(client, "/admin/mfa/verify-enroll", cookies, data={"code": pyotp.TOTP(secret).now()})
+    # Log out via the (still session-authed) admin and confirm the
+    # response clears BOTH cookies.
+    r = _post(client, "/admin/logout", cookies, follow_redirects=False)
+    assert r.status_code == 303
+    set_cookie_headers = r.headers.get_list("set-cookie")
+    assert any("ls_session" in h and "Max-Age=0" in h for h in set_cookie_headers), set_cookie_headers
+    assert any("ls_pre_mfa" in h and "Max-Age=0" in h for h in set_cookie_headers), set_cookie_headers
