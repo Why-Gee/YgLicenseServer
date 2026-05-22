@@ -3,13 +3,9 @@
 {% block topbar_title %}<a href="/admin/products">← Products</a>{{ product.name }} <code>{{ product.slug }}</code>{% endblock %}
 {% block content %}
 
-{% if request.query_params.get('issued') and request.query_params.get('key') %}
-<div class="success" style="word-break:break-all;">
-  <p>license issued. <strong>copy this key now — it is not shown again:</strong></p>
-  <pre style="margin:.5em 0;background:rgba(0,0,0,.2);padding:.5em;border-radius:4px;">{{ request.query_params.get('key') }}</pre>
-  <p>after this page reload, the listing shows only a truncated <code>{{ '<prefix>_<first6>…<last4>' }}</code> form. if a webhook URL was set, the signing secret is shown in the edit modal and is also only displayed once.</p>
-</div>
-{% endif %}
+{# Issuance success: the plaintext key + Copy button live INSIDE the modal
+   (Key field). A parent-page banner here would render hidden under the
+   auto-opened modal overlay — unusable. See _license_modal logic below. #}
 {% if request.query_params.get('edited') %}
 <div class="success">license updated.</div>
 {% endif %}
@@ -185,6 +181,9 @@
   "product_slug": "{{ product.slug }}",
   "reveal_lid": {{ ((request.query_params.get('webhook_lid') or request.query_params.get('issued')) or '')|tojson }},
   "auto_open_lid": {{ ((request.query_params.get('webhook_lid') or request.query_params.get('issued') or request.query_params.get('edited') or request.query_params.get('webhook_test_lid')) or '')|tojson }},
+  {# Plaintext key surfaces here for ONE render (the post-issue redirect carries
+     ?key=). admin.js strips it from the URL on load, so a refresh wipes it. #}
+  "issued_key": {{ (request.query_params.get('key') or '')|tojson }},
   "licenses": [
     {% for lic in licenses %}
     {
@@ -220,7 +219,7 @@
        otherwise drop the banner on the background page hidden under the
        overlay. Render here too so the admin sees the result inside the dialog. #}
     {% if request.query_params.get('issued') %}
-    <div class="success" style="margin-top:0;">license issued. the plaintext key is shown in the banner above — copy it now. if a webhook URL was set, the signing secret is shown below.</div>
+    <div class="success" style="margin-top:0;">license issued. <strong>copy the plaintext key from the Key field below now — it won't be shown again.</strong> after reload, only the truncated form is kept. if a webhook URL was set, the signing secret is shown below too.</div>
     {% endif %}
     {% if request.query_params.get('edited') %}
     <div class="success" style="margin-top:0;">license updated.</div>
@@ -242,8 +241,8 @@
         <label>Key</label>
         <div style="display:flex;gap:.4em;align-items:flex-start;">
           <pre id="lm-key" style="font-size:.85em;margin:0;flex:1;"></pre>
-          <button type="button" class="btn muted" data-copy-from="#lm-key"
-                  style="font-size:.85em;padding:.25em .7em;white-space:nowrap;">Copy</button>
+          <button type="button" id="lm-key-copy" class="btn muted" data-copy-from="#lm-key"
+                  style="font-size:.85em;padding:.25em .7em;white-space:nowrap;display:none;">Copy</button>
         </div>
         <div id="lm-key-email" class="muted" style="font-size:.85em;margin-top:.3em;"></div>
       </div>
@@ -346,6 +345,7 @@
   var customerLink = document.getElementById('lm-customer-link');
   var keyRow = document.getElementById('lm-key-row');
   var keyEl = document.getElementById('lm-key');
+  var keyCopyBtn = document.getElementById('lm-key-copy');
   var keyEmailEl = document.getElementById('lm-key-email');
   var planIn = document.getElementById('lm-plan');
   var maxIn = document.getElementById('lm-max-users');
@@ -508,7 +508,17 @@
       emailIn.removeAttribute('name');
       emailIn.removeAttribute('required');
       keyRow.style.display = '';
-      keyEl.textContent = lic.key_display;
+      // Key field: plaintext ONLY on the post-issuance reveal (server passed
+      // ?key= and this row matches the just-issued license). All other edits
+      // see the truncated display form -- Copy button hides because copying
+      // a truncated string is meaningless (and signals "this isn't the real key").
+      if (data.issued_key && data.reveal_lid === lic.id) {
+        keyEl.textContent = data.issued_key;
+        if (keyCopyBtn) keyCopyBtn.style.display = '';
+      } else {
+        keyEl.textContent = lic.key_display;
+        if (keyCopyBtn) keyCopyBtn.style.display = 'none';
+      }
       keyEmailEl.textContent = lic.email;
       // Edit mode: customer name is read-only. The license-edit endpoint
       // doesn't accept this field anymore (renaming a tenant-wide Customer
