@@ -247,96 +247,17 @@ EOF
 
 ---
 
-## Task 2: H2 — JWT `kid` + `aud` claims
+## Task 2: H2 — JWT `kid` claim (aud deferred to v1.0)
 
 **Files:**
 - Modify: `app/signing.py`
 - Test: `tests/test_phase2_authn.py` (append)
 
-- [ ] **Step 1: Write the failing test**
+**Why kid only, not kid+aud:** pyjwt validates the `aud` claim whenever it is present in a token. Adding `aud` to v0.22 tokens would break every client decoding via `jwt.decode(token, pub, algorithms=[...], options={"verify_exp": False})` — the reference ASM client included. That is a breaking change, not an advisory one. `aud` lands in Phase 4 (v1.0) alongside the other breaking changes.
 
-Append to `tests/test_phase2_authn.py`:
+`kid` IS safe to add now because pyjwt and other libraries ignore unknown payload claims; `kid` in a JWS *header* would be interpreted, but `kid` in the *payload* is just a free-form claim that callers can read or ignore.
 
-```python
-# ---------- H2: JWT kid + aud claims ---------------------------------------
-
-
-def test_jwt_carries_kid_and_aud_claims(client):
-    """Issued JWTs must carry kid (product id, survives slug rename) and
-    aud (product slug). Clients ignore unknown claims today; the new claims
-    are advisory until clients opt in."""
-    _create_product(client)
-    key = _issue(client)
-    r = client.post(
-        "/v1/check",
-        json={"key": key, "install_id": "ii-1", "version": "1.0"},
-    )
-    assert r.status_code == 200, r.text
-    token = r.json()["jwt"]
-
-    import jwt as pyjwt
-    # Decode without signature verification — we just want the payload.
-    claims = pyjwt.decode(token, options={"verify_signature": False})
-    assert "kid" in claims, f"jwt missing kid: {claims}"
-    assert "aud" in claims, f"jwt missing aud: {claims}"
-    assert claims["aud"] == "asm", f"aud should be product slug: {claims['aud']}"
-    # kid is an opaque UUID — assert shape, not value.
-    assert isinstance(claims["kid"], str) and len(claims["kid"]) >= 8, claims["kid"]
-```
-
-- [ ] **Step 2: Run — verify failure**
-
-```bash
-pytest tests/test_phase2_authn.py -v -k "kid_and_aud"
-```
-
-Expected: FAIL (current payload doesn't carry these claims).
-
-- [ ] **Step 3: Add the claims in `app/signing.py::sign_license_jwt`**
-
-Locate the `payload = {...}` dict and add the two new keys. The complete payload after the edit:
-
-```python
-    payload = {
-        "iss": product.jwt_issuer,
-        "kid": product.id,           # opaque per-product id; survives slug rename
-        "aud": product.slug,         # informational; matches the iss style
-        "iat": int(now.timestamp()),
-        "exp": int(cap.timestamp()),
-        "product": product.slug,
-        "license_id": license_id,
-        "install_id": install_id,
-        "plan": plan,
-        "max_users": max_users,
-        "features": features,
-        "valid_until": int(vu.timestamp()),
-    }
-```
-
-- [ ] **Step 4: Run the test**
-
-```bash
-pytest tests/test_phase2_authn.py -v -k "kid_and_aud"
-pytest -q
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add app/signing.py tests/test_phase2_authn.py
-git commit -m "$(cat <<'EOF'
-H2: add kid + aud claims to license JWTs
-
-kid = product.id (opaque, survives slug rename, future-proofs key rotation).
-aud = product.slug (informational, matches iss style). Clients ignore
-unknown claims today; the new claims become useful once a client opts in
-to per-product validation OR a future key-rotation flow needs to
-disambiguate which key signed a token.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
-EOF
-)"
-```
+(Test + impl in this task — single file change; existing per-fix commit pattern continues.)
 
 ---
 
@@ -1514,7 +1435,7 @@ git add app/__init__.py pyproject.toml
 git commit -m "$(cat <<'EOF'
 chore: bump version to 0.22.0
 
-Phase 2 authn + crypto hardening: H1 (XFF dropped), H2 (JWT kid/aud),
+Phase 2 authn + crypto hardening: H1 (XFF dropped), H2 (JWT kid; aud deferred),
 H3 (KEK-required gate), H7 (TOTP MFA on admin login).
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>

@@ -46,6 +46,14 @@ def sign_license_jwt(
     cap = min(now + timedelta(days=s.jwt_ttl_days), vu)
     payload = {
         "iss": product.jwt_issuer,
+        # opaque per-product id (UUID); survives slug rename, future-proofs key
+        # rotation. Carried as a payload claim (not the JWS header) -- pyjwt
+        # and most libraries ignore unknown payload claims, so adding it does
+        # not break existing clients. `aud` deliberately omitted from v0.22
+        # because pyjwt VALIDATES aud whenever it's present, which would
+        # break every client decoding without `audience=`; aud lands in v1.0
+        # alongside the other breaking changes.
+        "kid": product.id,
         "iat": int(now.timestamp()),
         "exp": int(cap.timestamp()),
         "product": product.slug,

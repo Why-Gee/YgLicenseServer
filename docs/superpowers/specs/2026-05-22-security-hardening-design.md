@@ -141,13 +141,11 @@ Each fix-commit bumps both `pyproject.toml` and `app/__init__.py::__version__` �
 - Rationale: in the documented deploy Caddy is the immediate peer on loopback, so `request.client.host` is *already* the trusted last-hop value. Reading any client-supplied header is strictly worse.
 - If/when the deploy ever fronts a multi-hop CDN, the operator can re-introduce a `trusted_proxies`-aware reader. For now, the simpler stronger default wins.
 
-### H2 — JWT `kid` + `aud`
+### H2 — JWT `kid` (aud deferred to v1.0)
 
-`app/signing.py::sign_license_jwt` payload gains:
-- `"kid": product.id` — opaque per-product id (UUID), survives slug rename.
-- `"aud": product.slug` — informational, matches the `iss` style.
+`app/signing.py::sign_license_jwt` payload gains `"kid": product.id` — opaque per-product id (UUID), survives slug rename, future-proofs key rotation. Carried as a payload claim (not the JWS header); pyjwt and most libraries ignore unknown payload claims, so adding it does NOT break existing clients.
 
-No header `kid` (PyJWT supports payload `kid` as a custom claim; we don't want a separate header). Client-side validation is unchanged; new claims are advisory until clients opt in.
+**`aud` deliberately deferred to Phase 4 (v1.0).** pyjwt validates the `aud` claim whenever it is present in a token. Adding `aud` to v0.22 tokens would break every client that decodes without passing `audience=...` — including the reference ASM client. That is a breaking change, not an advisory addition. Phase 4 already carries breaking changes (key hashing); `aud` lands there alongside an explicit client-side migration note.
 
 ### H7 — TOTP MFA on admin login
 
@@ -178,7 +176,7 @@ No header `kid` (PyJWT supports payload `kid` as a custom claim; we don't want a
 
 1. `H3: gate plaintext secret writes behind LICENSE_SERVER_REQUIRE_KEK`
 2. `H1: drop XFF parsing; trust request.client.host`
-3. `H2: add kid + aud JWT claims`
+3. `H2: add kid JWT claim (aud deferred to v1.0 — breaking)`
 4. `H7: TOTP MFA on admin login`
 
 ---
@@ -233,7 +231,18 @@ ${LICENSE_HOST} {
 
 ---
 
-## Phase 4 — At-rest license-key hashing (v1.0.0, breaking)
+## Phase 4 — At-rest license-key hashing + JWT `aud` (v1.0.0, breaking)
+
+### JWT `aud` claim
+
+`sign_license_jwt` adds `"aud": product.slug`. pyjwt and other JWT libraries validate `aud` whenever present, so existing clients that decode via `jwt.decode(token, pub, algorithms=[...], options={"verify_exp": False})` will start raising `InvalidAudienceError`. Document the breaking change in CHANGELOG and update the README example:
+
+```python
+# v1.0+: pass audience= matching the product slug
+claims = jwt.decode(token, pub, algorithms=["EdDSA"], audience=product_slug, options={"verify_exp": False})
+```
+
+Reference ASM client integration must bump in lockstep with this release.
 
 ### Schema
 

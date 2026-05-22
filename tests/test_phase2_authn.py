@@ -58,3 +58,33 @@ def test_rate_limit_client_ip_ignores_xff():
         headers = {"x-forwarded-for": "10.20.30.40"}
 
     assert client_ip(_FakeRequest()) == "127.0.0.1"
+
+
+# ---------- H2: JWT kid claim (aud deferred to v1.0) -----------------------
+
+
+def test_jwt_carries_kid_claim(client):
+    """Issued JWTs must carry kid (product id, survives slug rename).
+    aud is intentionally NOT added in v0.22 because pyjwt validates aud
+    whenever it's present in a token, which would break every client
+    decoding without `audience=`. aud lands in v1.0 with the other
+    breaking changes."""
+    _create_product(client)
+    key = _issue(client)
+    r = client.post(
+        "/v1/check",
+        json={"key": key, "install_id": "ii-1", "version": "1.0"},
+    )
+    assert r.status_code == 200, r.text
+    token = r.json()["jwt"]
+
+    import jwt as pyjwt
+    # Decode without signature verification — we just want the payload.
+    claims = pyjwt.decode(token, options={"verify_signature": False})
+    assert "kid" in claims, f"jwt missing kid: {claims}"
+    # kid is an opaque UUID — assert shape, not value.
+    assert isinstance(claims["kid"], str) and len(claims["kid"]) >= 8, claims["kid"]
+    # Explicit anti-regression: aud must NOT be added today (breaking change).
+    assert "aud" not in claims, (
+        f"aud present in v0.22 token; defer to v1.0 with breaking changes: {claims}"
+    )
