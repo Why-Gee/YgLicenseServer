@@ -37,7 +37,11 @@ def mfa_enroll(
     require_login(request)
     require_csrf(request, csrf_token)
     start = mfa_svc.start_enrol(db)
-    return JSONResponse({"secret": start.secret, "provisioning_uri": start.provisioning_uri})
+    return JSONResponse({
+        "secret": start.secret,
+        "provisioning_uri": start.provisioning_uri,
+        "qr_svg": start.qr_svg,
+    })
 
 
 @router.post("/admin/mfa/verify-enroll")

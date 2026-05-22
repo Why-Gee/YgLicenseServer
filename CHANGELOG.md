@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.2 — MFA enrolment QR code
+
+`/admin/mfa` now renders a scannable QR code alongside the otpauth URI and
+the raw base32 secret. The QR is server-generated inline SVG (`qrcode` lib,
+no pillow/raster path, no client-side JS lib). The "I can't scan" fallback —
+URI + manual secret — moves into a collapsed `<details>` block.
+
+Adds `qrcode>=7.4` as a runtime dep. No schema or wire-format changes.
+
 ## v1.0.1 — admin-UI issuance UX
 
 Two bugs surfaced during the v1.0.0 smoke test:

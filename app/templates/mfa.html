@@ -27,9 +27,16 @@
     <p class="muted">Adding TOTP MFA means an attacker with the admin token still has to provide a one-time code on every login. Use an authenticator app (Google Authenticator, Authy, 1Password, etc.).</p>
     <button type="button" id="start-enrol" class="btn">Start enrolment</button>
     <div id="enrol-step" style="display:none;margin-top:1em;">
-      <p>Scan this URI with your authenticator app:</p>
-      <pre id="prov-uri" style="word-break:break-all;"></pre>
-      <p class="muted">Or enter this secret manually: <code id="secret"></code></p>
+      <p>Scan this QR code with your authenticator app:</p>
+      {# Server-generated SVG drops in here via innerHTML; the SVG is
+         pyotp+qrcode output, not user content, so injection is safe. #}
+      <div id="qr" style="background:#fff;padding:.6em;display:inline-block;border-radius:6px;max-width:240px;"></div>
+      <details style="margin-top:.8em;">
+        <summary class="muted" style="cursor:pointer;">Can't scan? Enter the URI / secret manually</summary>
+        <p style="margin-top:.5em;">Provisioning URI:</p>
+        <pre id="prov-uri" style="word-break:break-all;"></pre>
+        <p class="muted">Or just the secret: <code id="secret"></code></p>
+      </details>
       <form id="verify-form" style="margin-top:1em;">
         {{ csrf_input(request) }}
         <label>Enter the 6-digit code from your app</label>
@@ -57,6 +64,7 @@
     fd.append('csrf_token', document.querySelector('input[name=csrf_token]').value);
     const r = await fetch('/admin/mfa/enroll', { method: 'POST', body: fd, credentials: 'same-origin' });
     const d = await r.json();
+    document.getElementById('qr').innerHTML = d.qr_svg || '';
     document.getElementById('prov-uri').textContent = d.provisioning_uri;
     document.getElementById('secret').textContent = d.secret;
     document.getElementById('enrol-step').style.display = '';
