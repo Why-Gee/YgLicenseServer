@@ -41,7 +41,7 @@ def _bootstrap_license(client: TestClient, *, webhook_url: str = "") -> str:
         data=form, cookies=cookies, follow_redirects=False,
     )
     assert r.status_code == 303, r.text
-    return r.headers["location"].rsplit("issued=", 1)[1]
+    return r.headers["location"].rsplit("issued=", 1)[1].split("&")[0]
 
 
 URL = "https://example.com/api/license/webhook"

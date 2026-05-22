@@ -132,7 +132,7 @@ def export_licenses(slug: str, db: Session = Depends(get_db)) -> StreamingRespon
     def gen() -> Iterator[list[str]]:
         for r in rows_q:
             yield [
-                r.id, r.key, r.plan, r.status, str(r.max_users),
+                r.id, r.key_display, r.plan, r.status, str(r.max_users),
                 _iso(r.valid_until),
                 r.customer.email if r.customer else "",
                 r.customer.name if (r.customer and r.customer.name) else "",

@@ -126,11 +126,11 @@ def test_v1_check_public_url_http_rejected_unless_allow_http_set(client):
         follow_redirects=False,
     )
     assert r.status_code == 303
-    r = client.get(
-        "/v1/admin/products/asm/licenses",
-        headers={"Authorization": "Bearer test-admin"},
-    )
-    key = r.json()["items"][0]["key"]
+    # Plaintext key from the ?key= redirect param (v1.0: listing shows key_display only).
+    from urllib.parse import parse_qs, urlparse
+    loc = r.headers["location"]
+    key = parse_qs(urlparse(loc).query).get("key", [None])[0]
+    assert key, f"no key= in redirect: {loc}"
     # Client tries to self-register an http URL (non-forbidden hostname,
     # so only the scheme blocks it when allow_http_webhook=False).
     r = client.post(

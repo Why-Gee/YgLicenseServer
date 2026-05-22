@@ -64,8 +64,12 @@ def license_issue(
         return RedirectResponse(
             f"/admin/products/{slug}?error={err_code(e)}", status_code=303
         )
+    # Plaintext appears in this query string for ~1 request; acceptable
+    # trade-off for the single-op deployment shape — admin owns their access logs.
+    from urllib.parse import quote
     return RedirectResponse(
-        f"/admin/products/{slug}?issued={result.license.id}", status_code=303
+        f"/admin/products/{slug}?issued={result.license.id}&key={quote(result.license.key)}",
+        status_code=303,
     )
 
 

@@ -283,7 +283,7 @@ def admin_list_licenses(
     return {
         "items": [
             {
-                "id": r.id, "key": r.key, "plan": r.plan, "status": r.status,
+                "id": r.id, "key": r.key_display, "plan": r.plan, "status": r.status,
                 "max_users": r.max_users, "features": r.features,
                 "valid_until": r.valid_until.isoformat(),
                 "customer": r.customer.email, "customer_name": r.customer.name,

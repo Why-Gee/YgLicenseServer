@@ -228,3 +228,62 @@ def test_v1_check_succeeds_even_when_plaintext_column_is_wrong(make_client, monk
         json={"key": plaintext, "install_id": "ii-1", "version": "1.0"},
     )
     assert r.status_code == 200, "lookup should succeed via key_hash, not key"
+
+
+# ---------- display layer ---------------------------------------------------
+
+
+def test_admin_list_licenses_returns_key_display_not_plaintext(make_client, monkeypatch):
+    from cryptography.fernet import Fernet
+    c = make_client(
+        LICENSE_KEY_PEPPER="testpepper" * 4,
+        LICENSE_KEY_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+    )
+    r = c.post(
+        "/v1/admin/products",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"slug": "asm", "name": "ASM", "key_prefix": "asm"},
+    )
+    r = c.post(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"email": "alice@example.com", "plan": "standard", "valid_days": 30},
+    )
+    plaintext = r.json()["key"]
+    r = c.get(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+    )
+    assert r.status_code == 200
+    item = r.json()["items"][0]
+    # New v1.0 semantics: 'key' field in admin list shows truncated display.
+    assert item["key"] != plaintext, "plaintext leaked into admin list response"
+    assert "…" in item["key"], f"key field is not truncated: {item['key']}"
+    assert item["key"].startswith("asm_")
+
+
+def test_csv_export_uses_key_display(make_client, monkeypatch):
+    from cryptography.fernet import Fernet
+    c = make_client(
+        LICENSE_KEY_PEPPER="testpepper" * 4,
+        LICENSE_KEY_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+    )
+    r = c.post(
+        "/v1/admin/products",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"slug": "asm", "name": "ASM", "key_prefix": "asm"},
+    )
+    r = c.post(
+        "/v1/admin/products/asm/licenses",
+        headers={"Authorization": "Bearer test-admin"},
+        json={"email": "alice@example.com", "plan": "standard", "valid_days": 30},
+    )
+    plaintext = r.json()["key"]
+    r = c.get(
+        "/v1/admin/exports/products/asm/licenses.csv",
+        headers={"Authorization": "Bearer test-admin"},
+    )
+    assert r.status_code == 200
+    body = r.text
+    assert plaintext not in body, "plaintext leaked into CSV export"
+    assert "…" in body, "key_display not present in CSV export"

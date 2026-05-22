@@ -455,6 +455,7 @@ window.makeDirtyGuard = function (opts) {
     'product_edited',
     'edited',
     'issued',
+    'key',
     'webhook_lid',
     'webhook_test_lid',
     'webhook_test_ok',

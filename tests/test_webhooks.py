@@ -97,7 +97,7 @@ def _issue_via_ui(client: TestClient, *, webhook_url: str = "") -> str:
     assert r.status_code == 303, r.text
     # Pull the issued license id from the redirect URL.
     loc = r.headers["location"]
-    return loc.rsplit("issued=", 1)[1]
+    return loc.rsplit("issued=", 1)[1].split("&")[0]
 
 
 # ---------- DNS stub fixture -----------------------------------------------
@@ -229,7 +229,7 @@ def test_bulk_delete_is_atomic_and_fires_one_webhook_per_license(
             data=form, cookies=cookies, follow_redirects=False,
         )
         assert r.status_code == 303
-        lids.append(r.headers["location"].rsplit("issued=", 1)[1])
+        lids.append(r.headers["location"].rsplit("issued=", 1)[1].split("&")[0])
 
     # Bulk-delete all three. httpx encodes a dict with a list value as
     # repeated form fields (license_ids=...&license_ids=...&...).
