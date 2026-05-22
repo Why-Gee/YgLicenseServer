@@ -216,6 +216,8 @@ class IssueIn(BaseModel):
     max_users: int = 10
     features: dict = {}
     valid_days: int = 365
+    webhook_url: str | None = None
+    allow_http_webhook: bool = False
     stripe_customer_id: str | None = None
 
 
@@ -241,6 +243,8 @@ def admin_issue(slug: str, body: IssueIn, db: Session = Depends(get_db)) -> Issu
         email=body.email, name=body.name,
         plan=body.plan, max_users=body.max_users,
         valid_days=body.valid_days, features=body.features,
+        webhook_url=body.webhook_url,
+        allow_http_webhook=body.allow_http_webhook,
         stripe_customer_id=body.stripe_customer_id,
         note="admin/issue",
         send_email=True,

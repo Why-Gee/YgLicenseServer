@@ -303,15 +303,20 @@ def try_deliver(db: Session, delivery_id: str) -> bool:
         d.status = "abandoned"
         d.last_error = f"payload_decode: {e}"
         return False
-    # Live license carries the allow_http flag. If the license is gone
-    # (delete-cascade fired this delivery), fall back to inferring from
-    # the stored URL's scheme.
+    # Read the live license's flag if the license still exists, otherwise
+    # infer from the stored URL scheme (the URL was already validated at
+    # enqueue time, so its scheme is a reliable proxy for the deleted
+    # license's flag). An admin flipping allow_http_webhook OFF on a live
+    # license MUST be respected for in-flight retries — that's why the
+    # fallback is conditioned on license absence, not on flag value.
     allow_http = False
     if d.license_id:
         lic = db.query(License).filter_by(id=d.license_id).one_or_none()
         if lic is not None:
             allow_http = bool(lic.allow_http_webhook)
-    if not allow_http:
+        else:
+            allow_http = d.url.startswith("http://")
+    else:
         allow_http = d.url.startswith("http://")
     # Resign fresh on each attempt so receiver-side replay windows (5min
     # default) don't reject a backed-off retry. Receiver dedups on the

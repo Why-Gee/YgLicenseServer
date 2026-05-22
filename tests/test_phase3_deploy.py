@@ -142,3 +142,48 @@ def test_v1_check_public_url_http_rejected_unless_allow_http_set(client):
     )
     assert r.status_code == 400, r.text
     assert r.json().get("detail", {}).get("reason") == "invalid_public_url"
+
+
+def test_revoking_allow_http_respects_pending_retries(client):
+    """Admin revokes allow_http_webhook on a live license; pending
+    WebhookDelivery retries must refuse, not silently fire over http://
+    by URL-scheme fallback inference."""
+    _create_product(client)
+    cookies = _admin_login(client)
+    r = _form_post(
+        client, "/admin/products/asm/licenses", cookies,
+        data={
+            "email": "alice@example.com", "plan": "standard",
+            "max_users": "10", "valid_days": "30", "features_json": "{}",
+            "webhook_url": "http://customer.example.com/wh",
+            "allow_http_webhook": "1",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+
+    from app.db import SessionLocal
+    from app.models import License, WebhookDelivery
+    from app.webhooks import enqueue, try_deliver
+
+    with SessionLocal() as s:
+        lic = s.query(License).first()
+        d = enqueue(
+            s, url=lic.webhook_url, secret=lic.webhook_secret,
+            event_type="license.test", data={"k": "v"},
+            license_id=lic.id, product_id=lic.product_id,
+        )
+        s.commit()
+        delivery_id = d.id
+        # Revoke the flag after enqueueing but before delivery fires.
+        lic.allow_http_webhook = 0
+        s.commit()
+
+    # try_deliver must refuse because the live license now has the flag off,
+    # regardless of the stored URL's http:// scheme.
+    with SessionLocal() as s:
+        ok = try_deliver(s, delivery_id)
+        s.commit()
+        assert ok is False, "delivery should have been refused after flag revocation"
+        d = s.query(WebhookDelivery).filter_by(id=delivery_id).one()
+        assert d.last_error and "refused" in d.last_error.lower(), d.last_error
