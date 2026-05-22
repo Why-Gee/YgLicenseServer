@@ -123,6 +123,10 @@ def _stub_getaddrinfo(host, port, *args, **kwargs):
 def _patch_dns(monkeypatch):
     """Ensure test webhook hostnames resolve to a public IP so
     resolve_safe_address doesn't refuse delivery."""
+    # Per-test override: tests that need a different resolution (e.g. a DNS
+    # failure case) can call monkeypatch.setattr(socket, "getaddrinfo", ...)
+    # inside the test; the autouse fixture installs the default, the per-
+    # test setattr replaces it for that test.
     monkeypatch.setattr(socket, "getaddrinfo", _stub_getaddrinfo)
 
 

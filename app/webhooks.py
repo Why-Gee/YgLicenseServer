@@ -20,10 +20,12 @@ Inspired by Stripe's webhook design:
 Transport notes:
 - Uses the shared httpx.Client from app.http_client. Redirects are
   disabled there, so a hostile receiver can't 302 us to an internal IP.
-- Right before each call we run app.security.is_safe_for_delivery(). A
-  URL that resolves to a private/loopback/link-local addr is refused with
-  no request sent. DNS failures pass through (the HTTP call will surface
-  the same error and there's no SSRF risk if the name doesn't resolve).
+- Before each call we run app.security.resolve_safe_address(). It
+  resolves the hostname once, returns the literal IP, and deliver()
+  rewrites the request URL to that IP so httpx never re-resolves at
+  connect time (closes the DNS-rebinding TOCTOU). The original hostname
+  rides in the Host header and TLS SNI so virtual-hosting and cert
+  validation against the hostname still work.
 
 Receiver pseudo-code (any language):
 
@@ -110,9 +112,13 @@ def deliver(
     is the request that triggered the status change, and we never want a
     webhook delivery to break license-issuance/disable/etc.
 
-    A URL that resolves to a private/loopback IP is refused before sending
-    (SSRF guard). DNS failures are not refused; httpx will surface the
-    same error path naturally.
+    SSRF guard: resolve_safe_address() resolves the URL once and rewrites
+    the connection to the literal IP, pinning DNS and closing the TOCTOU
+    window. Refusal cases (all return False, consume one retry attempt, and
+    schedule the next via the backoff worker — same treatment as a 5xx):
+      - URL fails the cheap shape check (bad scheme, literal private IP, *.local, ...)
+      - DNS resolution fails (OSError from getaddrinfo)
+      - Every resolved address is private/loopback/link-local/multicast
 
     `event_id` + `timestamp` are passed through when retrying a previously-
     enqueued delivery so the receiver-side dedup-by-event-id keeps working
@@ -120,7 +126,9 @@ def deliver(
     """
     resolved = resolve_safe_address(url, allow_http=True)
     if resolved is None:
-        log.error("refusing webhook to unsafe url: %s", url)
+        # resolve_safe_address already logged the specific reason (shape /
+        # dns_failed / all_private) at WARNING level.
+        log.warning("webhook refused (see above): %s", url)
         return False, None, "refused:unsafe_url"
     ip, port, scheme, host = resolved
 
