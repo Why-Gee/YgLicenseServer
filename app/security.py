@@ -137,6 +137,50 @@ def is_safe_url_shape(url: str, *, allow_http: bool = False) -> bool:
         return not _ip_is_private(host)
 
 
+def resolve_safe_address(
+    url: str, *, allow_http: bool = False,
+) -> tuple[str, int, str, str] | None:
+    """DNS-pinned SSRF guard for outbound HTTP.
+
+    Returns a tuple (resolved_ip, port, scheme, original_hostname) the caller
+    should use to rewrite the request URL to the literal IP, while setting
+    `Host: <original_hostname>` and TLS SNI to the same. This closes the
+    TOCTOU window that `is_safe_for_delivery` leaves open: that function
+    resolves DNS, then httpx re-resolves at connect time, so an attacker
+    with a low-TTL authoritative server can return a public IP first and an
+    internal IP second.
+
+    Returns None when:
+      - the URL fails the cheap shape check (`is_safe_url_shape`)
+      - DNS resolution fails
+      - every resolved address is private/loopback/link-local/multicast
+    """
+    if not is_safe_url_shape(url, allow_http=allow_http):
+        return None
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if not host:
+        return None
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    # Literal IPs short-circuit DNS but still get the private-range check.
+    try:
+        ipaddress.ip_address(host)
+        if _ip_is_private(host):
+            return None
+        return host, port, parts.scheme, host
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError:
+        return None
+    for _fam, _t, _p, _c, sockaddr in infos:
+        addr = sockaddr[0]
+        if not _ip_is_private(addr):
+            return addr, port, parts.scheme, host
+    return None
+
+
 def is_safe_for_delivery(url: str, *, allow_http: bool = False) -> tuple[bool, str | None]:
     """Authoritative SSRF check used right before an outbound request.
 

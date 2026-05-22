@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import csv
 import io
+import socket
 from contextlib import contextmanager
 
 import httpx
@@ -85,6 +86,26 @@ def _issue_with_webhook(client: TestClient, slug: str, webhook_url: str) -> str:
     loc = r.headers["location"]
     assert "issued=" in loc, loc
     return loc.split("issued=")[1].split("&")[0]
+
+
+# ---------- DNS stub fixture -----------------------------------------------
+# resolve_safe_address resolves DNS before building the pinned URL.  Test
+# hostnames like *.example.com may not resolve in CI, so return a routable
+# public IP for any .example.com hostname.  Per-test overrides (monkeypatch
+# inside the test body) take precedence because they run after this fixture.
+
+_REAL_GETADDRINFO = socket.getaddrinfo
+
+
+def _stub_getaddrinfo(host, port, *args, **kwargs):
+    if isinstance(host, str) and host.endswith(".example.com"):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", port or 0))]
+    return _REAL_GETADDRINFO(host, port, *args, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _patch_dns(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _stub_getaddrinfo)
 
 
 # ---------- H4: _fire_deleted_webhook --------------------------------------
@@ -196,3 +217,68 @@ def test_events_csv_neutralises_formula_chars(client):
         for cell in row:
             if cell and cell[0] in ("=", "+", "-", "@", "\t", "\r"):
                 pytest.fail(f"unsanitised cell escaped into events.csv: {cell!r}")
+
+
+# ---------- Vuln 2: DNS-rebinding bypass -----------------------------------
+
+
+def test_webhook_delivery_pins_resolved_ip(client, monkeypatch):
+    """Mock getaddrinfo to return one IP, then assert httpx receives a
+    request whose URL host is that IP (not the original hostname) and whose
+    Host header carries the original hostname. Proves the deliver path
+    resolves once and connects by IP, defeating DNS-rebinding."""
+    # Capture what getaddrinfo says for the receiver hostname.
+    real_getaddrinfo = socket.getaddrinfo
+
+    # 93.184.216.34 = example.com; not in any private/reserved range per
+    # Python's ipaddress module (unlike RFC-5737 TEST-NET-3 203.0.113.0/24
+    # which is_private=True in Python 3.11+).
+    def _fake_getaddrinfo(host, port, *args, **kwargs):
+        if host == "customer.example.com":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", port or 0))]
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
+
+    _create_product(client)
+    with _captured(monkeypatch) as sent:
+        lid = _issue_with_webhook(client, "asm", "https://customer.example.com/wh")
+        cookies = _admin_login(client)
+        # disable → fires a status-change webhook
+        r = _form_post(
+            client, f"/admin/licenses/{lid}/disable", cookies, follow_redirects=False,
+        )
+        assert r.status_code == 303
+    assert sent, "no webhook fired"
+    req = sent[-1]
+    # URL must contain the pinned IP, not the hostname.
+    assert "93.184.216.34" in req["url"], f"request url did not use pinned IP: {req['url']}"
+    assert "customer.example.com" not in req["url"], (
+        f"hostname leaked into url; DNS-rebind window still open: {req['url']}"
+    )
+    # Host header must still be the original hostname so the receiver
+    # virtual-hosts correctly and TLS SNI matches the cert.
+    assert req["headers"].get("host") == "customer.example.com", req["headers"]
+
+
+def test_webhook_refused_when_dns_resolves_only_to_private(client, monkeypatch):
+    """If every A/AAAA the hostname returns is private/loopback/link-local,
+    deliver must refuse before opening any socket."""
+    real_getaddrinfo = socket.getaddrinfo
+
+    def _fake_getaddrinfo(host, port, *args, **kwargs):
+        if host == "bad.example.com":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("169.254.169.254", port or 0))]
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo)
+
+    _create_product(client)
+    with _captured(monkeypatch) as sent:
+        lid = _issue_with_webhook(client, "asm", "https://bad.example.com/wh")
+        cookies = _admin_login(client)
+        r = _form_post(
+            client, f"/admin/licenses/{lid}/disable", cookies, follow_redirects=False,
+        )
+        assert r.status_code == 303
+    assert not sent, f"webhook fired despite link-local DNS: {sent}"

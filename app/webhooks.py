@@ -50,12 +50,13 @@ import time
 import uuid
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import httpx
 
 from app._time import utcnow
 from app.http_client import get_client
-from app.security import is_safe_for_delivery
+from app.security import resolve_safe_address
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -117,10 +118,11 @@ def deliver(
     enqueued delivery so the receiver-side dedup-by-event-id keeps working
     across retries.
     """
-    ok_url, reason = is_safe_for_delivery(url, allow_http=True)
-    if not ok_url and reason and reason.startswith(("unsafe_url_shape", "resolves_to_private")):
-        log.error("refusing webhook to unsafe url: %s (%s)", url, reason)
-        return False, None, f"refused:{reason}"
+    resolved = resolve_safe_address(url, allow_http=True)
+    if resolved is None:
+        log.error("refusing webhook to unsafe url: %s", url)
+        return False, None, "refused:unsafe_url"
+    ip, port, scheme, host = resolved
 
     if event_id is None:
         event_id = str(uuid.uuid4())
@@ -140,8 +142,23 @@ def deliver(
         "X-License-Server-Event-Id": event_id,
         "X-License-Server-Signature": f"t={timestamp},v1={sig}",
     }
+    # Rewrite URL host → literal IP so httpx's own resolver can't change
+    # answers between our check and connect. Preserve the original hostname
+    # in the Host header + TLS SNI so virtual-hosting and certs still work.
+    ip_for_url = f"[{ip}]" if ":" in ip else ip
+    parts = urlsplit(url)
+    pinned_url = f"{scheme}://{ip_for_url}:{port}{parts.path or '/'}"
+    if parts.query:
+        pinned_url += "?" + parts.query
+    pinned_headers = {**headers, "Host": host}
     try:
-        r = get_client().post(url, content=body, headers=headers, timeout=timeout)
+        r = get_client().post(
+            pinned_url,
+            content=body,
+            headers=pinned_headers,
+            timeout=timeout,
+            extensions={"sni_hostname": host},
+        )
     except httpx.HTTPError as e:
         log.warning("webhook send failed: %s %s: %s", event_type, url, e)
         return False, None, str(e)
