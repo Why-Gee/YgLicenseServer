@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app import webhooks as wh
 from app.keystore import encrypt_secret
 from app.models import Event, License, Product
 from app.services.errors import Conflict, NotFound, ValidationFailed
@@ -109,14 +110,13 @@ def delete_product(
     """
     # Local import keeps the service modules importable from each other
     # without ordering pain.
-    from app.services.licenses import _delete_license_in_tx, _fire_deleted_webhook, _run
+    from app.services.licenses import _delete_license_in_tx, _run
 
     p = db.query(Product).filter_by(slug=slug).one_or_none()
     if p is None:
         raise NotFound("product not found")
     licenses = db.query(License).filter_by(product_id=p.id).all()
     pairs = [_delete_license_in_tx(db, lic, note="service/product-cascade") for lic in licenses]
-    snapshots = [snap for snap, _ in pairs]
     license_count = len(licenses)
     db.add(Event(
         type="product:deleted",
@@ -129,8 +129,9 @@ def delete_product(
     db.query(Event).filter_by(product_id=p.id).update({"product_id": None})
     db.delete(p)
     db.commit()
-    for snap in snapshots:
-        _run(lambda s=snap: _fire_deleted_webhook(s), schedule)
+    for _snap, delivery_id in pairs:
+        if delivery_id:
+            _run(lambda d=delivery_id: wh.attempt_in_fresh_session(d), schedule)
     return ProductDeletion(license_count=license_count)
 
 

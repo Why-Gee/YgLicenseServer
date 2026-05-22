@@ -5,8 +5,6 @@ implemented (red-green-refactor).
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 from contextlib import contextmanager
 
 import httpx
@@ -104,3 +102,13 @@ def test_delete_product_fires_webhooks_without_crashing(client, monkeypatch):
         assert r.status_code == 303, r.text
     deleted = [s for s in sent if "license.deleted" in s["headers"].get("x-license-server-event", "")]
     assert len(deleted) == 1, f"expected 1 license.deleted webhook, got {sent}"
+
+    from app.db import SessionLocal
+    from app.models import WebhookDelivery
+    with SessionLocal() as s:
+        deliveries = s.query(WebhookDelivery).all()
+        deleted_rows = [d for d in deliveries if d.event_type == "license.deleted"]
+        assert len(deleted_rows) == 1, (
+            f"expected exactly one WebhookDelivery row for license.deleted, "
+            f"got {len(deleted_rows)}: {[(d.id, d.event_type) for d in deliveries]}"
+        )
