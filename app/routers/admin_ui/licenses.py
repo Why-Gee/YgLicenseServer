@@ -59,6 +59,9 @@ def license_issue(
             webhook_url=webhook_url or None,
             allow_http_webhook=(allow_http_webhook == "1"),
             note="ui/issue",
+            # UI used to skip this and admins were copy-pasting keys by
+            # hand. Match the JSON API which has always sent on issue.
+            send_email=True,
         )
     except Unsafe as e:
         return RedirectResponse(

@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.0.1 — admin-UI issuance UX
+
+Two bugs surfaced during the v1.0.0 smoke test:
+
+- **Banner placement.** The post-issuance green flash with the plaintext key
+  rendered on the parent page, hidden under the auto-opened edit modal —
+  unusable. The key now lives inside the modal's Key field with its own
+  Copy-to-clipboard button. On any subsequent page load the field shows only
+  the truncated display form and the Copy button hides.
+- **No customer email.** UI issuance was passing `send_email=False` to the
+  service, so the Resend dispatch never fired (JSON API has always sent on
+  issue). Fixed.
+
+No schema or wire-format changes; safe drop-in upgrade from v1.0.0.
+
 ## v1.0.0 — breaking
 
 ### License-key storage
