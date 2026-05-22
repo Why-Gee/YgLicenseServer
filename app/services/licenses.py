@@ -453,3 +453,37 @@ def delete_licenses_bulk(
         if delivery_id:
             _run(lambda d=delivery_id: wh.attempt_in_fresh_session(d), schedule)
     return [snap for snap, _ in pairs]
+
+
+def _fire_deleted_webhook(snapshot: _DeletedLicenseSnapshot) -> None:
+    """Post-commit webhook fan-out for a deleted license.
+
+    Opens a fresh session, enqueues a WebhookDelivery, fires one attempt.
+    Imported by app.services.products.delete_product, which calls this in
+    a `schedule(...)` callback so it runs AFTER the cascade's commit.
+    """
+    if not (snapshot.webhook_url and snapshot.webhook_secret):
+        return
+    from app.db import SessionLocal
+    s = SessionLocal()
+    try:
+        d = wh.enqueue(
+            s, url=snapshot.webhook_url, secret=snapshot.webhook_secret,
+            event_type=wh.EVENT_DELETED,
+            data={
+                "license_id": snapshot.license_id,
+                "license_key": snapshot.key,
+                "key": snapshot.key,
+                "product_slug": snapshot.product_slug,
+                "customer_email": snapshot.customer_email,
+            },
+            license_id=None,
+            product_id=None,
+        )
+        s.commit()
+        wh.attempt_in_fresh_session(d.id)
+    except Exception:
+        s.rollback()
+        log.exception("post-commit deleted-webhook failed")
+    finally:
+        s.close()

@@ -115,7 +115,8 @@ def delete_product(
     if p is None:
         raise NotFound("product not found")
     licenses = db.query(License).filter_by(product_id=p.id).all()
-    snapshots = [_delete_license_in_tx(db, lic, note="service/product-cascade") for lic in licenses]
+    pairs = [_delete_license_in_tx(db, lic, note="service/product-cascade") for lic in licenses]
+    snapshots = [snap for snap, _ in pairs]
     license_count = len(licenses)
     db.add(Event(
         type="product:deleted",
