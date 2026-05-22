@@ -219,6 +219,33 @@ def admin_api_webhook_set(
     )
 
 
+@router.post("/admin/licenses/{lid}/webhook/convert-to-self")
+def license_webhook_convert_to_self(
+    lid: str, request: Request,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Flip an admin-set webhook to source='self' in one click. Keeps URL,
+    rotates secret. See docs/v1.0-workouttracker-client-findings.md item 1."""
+    require_login(request)
+    require_csrf(request, csrf_token)
+    lic = db.query(License).filter_by(id=lid).one_or_none()
+    if lic is None:
+        raise HTTPException(status_code=404)
+    try:
+        licenses_svc.convert_webhook_to_self(db, lic, note="ui/convert-to-self")
+    except ValidationFailed as e:
+        return RedirectResponse(
+            f"/admin/products/{lic.product.slug}?error={err_code(e)}",
+            status_code=303,
+        )
+    # Same redirect contract as /webhook update -- modal auto-opens with the
+    # newly-minted secret revealed once.
+    return RedirectResponse(
+        f"/admin/products/{lic.product.slug}?webhook_lid={lic.id}", status_code=303
+    )
+
+
 @router.post("/admin/licenses/{lid}/webhook/test")
 def license_webhook_test(
     lid: str, request: Request,

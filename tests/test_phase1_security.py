@@ -291,13 +291,16 @@ def test_webhook_delivery_pins_resolved_ip(client, monkeypatch):
 
 def test_v1check_does_not_overwrite_admin_set_webhook_url(client):
     """A license-key holder calling /v1/check with public_url must NOT
-    silently overwrite a webhook_url set by the admin."""
+    silently overwrite a webhook_url set by the admin.
+
+    Heartbeat itself MUST succeed — refusing the whole call (the previous
+    409 behavior) silently breaks every push-channel update because the
+    client falls into grace + the admin can't see why. See
+    docs/v1.0-workouttracker-client-findings.md item 3."""
     _create_product(client)
-    # Issue via UI form + capture plaintext key from the ?key= redirect param.
     key = _issue_and_get_key(
         client, data={"webhook_url": "https://admin.example.com/notify"}
     )
-    # Now an attacker holding the key tries to redirect the webhook.
     r = client.post(
         "/v1/check",
         json={
@@ -305,16 +308,43 @@ def test_v1check_does_not_overwrite_admin_set_webhook_url(client):
             "public_url": "https://attacker.tld/sink",
         },
     )
-    # The response must be a refusal (409 — locked) OR a 200 with the URL
-    # unchanged. The spec picks 409 for clarity.
-    assert r.status_code == 409, r.text
-    # Re-fetch the license; URL must still be the admin one.
-    r = client.get(
+    # Heartbeat succeeds with the JWT — no policy enforcement on this path.
+    assert r.status_code == 200, r.text
+    assert r.json().get("jwt"), r.json()
+    # URL unchanged.
+    r2 = client.get(
         "/v1/admin/products/asm/licenses",
         headers={"Authorization": "Bearer test-admin"},
     )
-    items = r.json()["items"]
+    items = r2.json()["items"]
     assert items[0].get("webhook_url") == "https://admin.example.com/notify"
+    # And the refusal must be auditable via an event row.
+    from app.db import SessionLocal
+    from app.models import Event
+    with SessionLocal() as s:
+        events = s.query(Event).filter_by(type="webhook:override_refused").all()
+        assert len(events) == 1, [e.type for e in s.query(Event).all()]
+        assert events[0].payload["attempted_url"] == "https://attacker.tld/sink"
+        assert events[0].payload["kept_url"] == "https://admin.example.com/notify"
+
+
+def test_v1check_admin_set_url_no_secret_echo_even_on_override_attempt(client):
+    """Even when a client sends a matching public_url against an admin-set
+    license, the response must NOT echo webhook_secret. Source stays admin,
+    secret stays locked to the admin's one-time-display."""
+    _create_product(client)
+    key = _issue_and_get_key(
+        client, data={"webhook_url": "https://admin.example.com/notify"}
+    )
+    r = client.post(
+        "/v1/check",
+        json={
+            "key": key, "install_id": "ii-1", "version": "1.0",
+            "public_url": "https://admin.example.com/notify",  # identical
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json().get("webhook_secret") in (None, "")
 
 
 def test_v1check_secret_not_returned_when_admin_set(client):

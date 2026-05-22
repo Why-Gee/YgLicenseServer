@@ -63,8 +63,13 @@ def check_license(
         ):
             raise CheckRejected("invalid_public_url", http_status=400)
         if lic.webhook_url != candidate:
-            # Admin-managed URLs are locked against /v1/check overrides.
             if lic.webhook_url_source == "admin":
+                # Admin-managed URLs are locked against /v1/check overrides.
+                # Log + emit an audit event but DON'T fail the heartbeat —
+                # the previous 409 here silently broke push-channel updates
+                # for every client that hardcoded a public_url, because the
+                # client fell into grace and the admin couldn't see why (see
+                # docs/v1.0-workouttracker-client-findings.md item 3).
                 log.warning(
                     "license %s refused public_url override of admin-set URL", lic.id,
                 )
@@ -74,26 +79,26 @@ def check_license(
                     payload={"attempted_url": candidate, "kept_url": lic.webhook_url},
                     note="service/check",
                 ))
-                db.commit()
-                raise CheckRejected("webhook_url_locked", http_status=409)
-            log.info("license %s webhook_url updated to %s", lic.id, candidate)
-            db.add(Event(
-                license_id=lic.id, product_id=lic.product_id,
-                type="webhook:self-registered",
-                payload={
-                    "previous_url": lic.webhook_url,
-                    "new_url": candidate,
-                    "via": "v1_check",
-                },
-                note="service/check",
-            ))
-            lic.webhook_url = candidate
-            lic.webhook_url_source = "self"
-            # First time the customer self-registers → mint a secret so the
-            # response can carry it. Re-self-registration of the same URL
-            # leaves the existing secret in place.
-            if not lic.webhook_secret:
-                lic.webhook_secret = webhooks.generate_secret()
+                # URL unchanged, no secret minted, no self-registered event.
+            else:
+                log.info("license %s webhook_url updated to %s", lic.id, candidate)
+                db.add(Event(
+                    license_id=lic.id, product_id=lic.product_id,
+                    type="webhook:self-registered",
+                    payload={
+                        "previous_url": lic.webhook_url,
+                        "new_url": candidate,
+                        "via": "v1_check",
+                    },
+                    note="service/check",
+                ))
+                lic.webhook_url = candidate
+                lic.webhook_url_source = "self"
+                # First time the customer self-registers → mint a secret so
+                # the response can carry it. Re-self-registration of the
+                # same URL leaves the existing secret in place.
+                if not lic.webhook_secret:
+                    lic.webhook_secret = webhooks.generate_secret()
 
     install = (
         db.query(Install)

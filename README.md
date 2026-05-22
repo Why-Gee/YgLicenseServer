@@ -77,6 +77,8 @@ For prod use Postgres (`postgresql+psycopg://...`), put the server behind HTTPS,
 
 In the client app, embed the product's public key and verify the JWT cached on disk. Reference implementation in ASM: <https://github.com/Why-Gee/AnimalShelterManager/tree/main/backend/app/licensing>.
 
+**Full v1.0+ integration guide:** [docs/v1.0-client-compat.md](docs/v1.0-client-compat.md) — covers `aud`, `kid`, webhook self-register, key-display semantics, and common mistakes.
+
 Minimal client check (Python, pyjwt):
 
 ```python
