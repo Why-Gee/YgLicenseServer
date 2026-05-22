@@ -81,8 +81,12 @@ Minimal client check (Python, pyjwt):
 
 ```python
 import jwt
+# v0.22+: tokens carry a `kid` claim (opaque product id); harmless to ignore.
+# v1.0+ (planned): tokens will also carry `aud` = product slug. Once that lands,
+# this call MUST pass `audience=product_slug` or pyjwt will raise InvalidAudienceError.
+# Today (no aud), the call below works as-is.
 claims = jwt.decode(token, public_key_pem, algorithms=["EdDSA"], options={"verify_exp": False})
-# claims has: license_id, install_id, plan, max_users, features, valid_until, product
+# claims has: license_id, install_id, plan, max_users, features, valid_until, product, kid
 ```
 
 `valid_until` is the source of truth for license expiry; `exp` is just the JWT cache TTL (default 7 days). Clients honor a configurable grace period after `valid_until` so the server can be down briefly without breaking customers.

@@ -155,7 +155,7 @@ Each fix-commit bumps both `pyproject.toml` and `app/__init__.py::__version__` â
 - `id` (PK, just `1` â€” single-row table since admin is single-tenant)
 - `enabled` (bool)
 - `secret_encrypted` (text, Fernet-wrapped under KEK)
-- `recovery_codes_hashed` (JSON list of BLAKE2b digests, single-use)
+- `recovery_codes_hashed` (JSON list of SHA-256 hex digests, single-use)
 - `created_at`, `last_used_at`
 
 **Routes (`app/routers/admin_ui/mfa.py`, new):**
