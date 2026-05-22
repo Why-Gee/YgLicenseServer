@@ -78,6 +78,14 @@ def _validate_secrets_at_boot() -> None:
             "stored as plaintext PEM in the DB. Generate with "
             "`python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`"
         )
+    if s.require_kek and not s.key_encryption_key:
+        log.critical(
+            "LICENSE_SERVER_REQUIRE_KEK=1 set but LICENSE_KEY_ENCRYPTION_KEY is "
+            "unset. Refusing to boot in plaintext-write mode. Generate a KEK "
+            "with `python -c 'from cryptography.fernet import Fernet; print("
+            "Fernet.generate_key().decode())'` and set it in the env."
+        )
+        sys.exit(78)  # EX_CONFIG
     # Production deploys that ship real customer emails must NOT use the
     # Resend public test sender (`onboarding@resend.dev`). Resend's
     # documentation is explicit that mail from that address is for

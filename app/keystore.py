@@ -100,6 +100,11 @@ def encrypt_secret(plaintext: str | None) -> str | None:
         return plaintext
     f = _fernet()
     if f is None:
+        if get_settings().require_kek:
+            raise RuntimeError(
+                "KEK required (LICENSE_SERVER_REQUIRE_KEK=1) but "
+                "LICENSE_KEY_ENCRYPTION_KEY is unset; refusing to write plaintext"
+            )
         return plaintext
     token = f.encrypt(plaintext.encode("utf-8"))
     return _PREFIX + token.decode("ascii")

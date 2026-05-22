@@ -28,6 +28,10 @@ class Settings(BaseModel):
     # under the current KEK. Unset in steady state; the deploy script writes it
     # transiently on `-RotateSecrets` and the operator clears it after rewrap.
     key_encryption_key_prev: str = ""
+    # When True (LICENSE_SERVER_REQUIRE_KEK=1 in env), the server refuses to
+    # store new secrets in plaintext. encrypt_secret() raises instead of
+    # passing the value through, and boot fails fast if KEK is unset.
+    require_kek: bool = False
     # Postgres connection-pool tuning. Defaults match SQLAlchemy's QueuePool
     # defaults; bump pool_size when a deploy sees frequent "QueuePool limit
     # reached" warnings. pool_recycle defends against intermediate-NAT idle
@@ -50,6 +54,7 @@ def get_settings() -> Settings:
         email_from=os.environ.get("EMAIL_FROM", "onboarding@resend.dev"),
         key_encryption_key=os.environ.get("LICENSE_KEY_ENCRYPTION_KEY", ""),
         key_encryption_key_prev=os.environ.get("LICENSE_KEY_ENCRYPTION_KEY_PREV", ""),
+        require_kek=os.environ.get("LICENSE_SERVER_REQUIRE_KEK", "").lower() in ("1", "true", "yes"),
         db_pool_size=int(os.environ.get("DB_POOL_SIZE", "5")),
         db_max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "10")),
         db_pool_recycle=int(os.environ.get("DB_POOL_RECYCLE", "1800")),

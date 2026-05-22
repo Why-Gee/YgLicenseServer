@@ -88,3 +88,68 @@ def test_jwt_carries_kid_claim(client):
     assert "aud" not in claims, (
         f"aud present in v0.22 token; defer to v1.0 with breaking changes: {claims}"
     )
+
+
+# ---------- H3: KEK required gate ------------------------------------------
+
+
+def _reload_config_and_keystore() -> None:
+    """Pick up new env vars by rebuilding the cached Settings + keystore."""
+    import importlib
+    import app.config as cfg
+    importlib.reload(cfg)
+    import app.keystore as ks
+    importlib.reload(ks)
+
+
+def test_require_kek_unset_keeps_legacy_plaintext_passthrough(monkeypatch):
+    """Default deploys without LICENSE_SERVER_REQUIRE_KEK keep the current
+    'plaintext passthrough' behaviour for backwards compatibility."""
+    monkeypatch.setenv("LICENSE_KEY_ENCRYPTION_KEY", "")
+    monkeypatch.delenv("LICENSE_SERVER_REQUIRE_KEK", raising=False)
+    _reload_config_and_keystore()
+    from app.keystore import encrypt_secret
+    assert encrypt_secret("plain") == "plain"
+
+
+def test_require_kek_set_refuses_to_persist_plaintext(monkeypatch):
+    """With LICENSE_SERVER_REQUIRE_KEK=1 and no KEK, encrypt_secret raises
+    instead of silently passing plaintext through."""
+    monkeypatch.setenv("LICENSE_KEY_ENCRYPTION_KEY", "")
+    monkeypatch.setenv("LICENSE_SERVER_REQUIRE_KEK", "1")
+    _reload_config_and_keystore()
+    from app.keystore import encrypt_secret
+    import pytest
+    with pytest.raises(RuntimeError, match="KEK required"):
+        encrypt_secret("plain")
+
+
+def test_require_kek_set_with_valid_key_works_normally(monkeypatch):
+    """LICENSE_SERVER_REQUIRE_KEK=1 + a valid KEK = normal Fernet wrapping."""
+    from cryptography.fernet import Fernet
+    kek = Fernet.generate_key().decode()
+    monkeypatch.setenv("LICENSE_KEY_ENCRYPTION_KEY", kek)
+    monkeypatch.setenv("LICENSE_SERVER_REQUIRE_KEK", "1")
+    _reload_config_and_keystore()
+    from app.keystore import encrypt_secret, decrypt_secret, is_encrypted
+    out = encrypt_secret("hello")
+    assert is_encrypted(out)
+    assert decrypt_secret(out) == "hello"
+
+
+def test_boot_validator_exits_when_kek_required_and_unset(monkeypatch):
+    """_validate_secrets_at_boot() must sys.exit(78) when REQUIRE_KEK is set
+    without a KEK present. Other branches (admin_token/session_secret missing)
+    already use the same EX_CONFIG exit code; this just adds one more trigger."""
+    monkeypatch.setenv("ADMIN_TOKEN", "x")
+    monkeypatch.setenv("SESSION_SECRET", "y")
+    monkeypatch.setenv("LICENSE_KEY_ENCRYPTION_KEY", "")
+    monkeypatch.setenv("LICENSE_SERVER_REQUIRE_KEK", "1")
+    _reload_config_and_keystore()
+    import importlib
+    import app.main as main_mod
+    importlib.reload(main_mod)
+    import pytest
+    with pytest.raises(SystemExit) as exc:
+        main_mod._validate_secrets_at_boot()
+    assert exc.value.code == 78
