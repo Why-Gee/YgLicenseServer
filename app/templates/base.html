@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{% block title %}YgLicenseServer{% endblock %}</title>
+  <title>YgLicenseServer{% block title_suffix %} - {% block title %}{% endblock %}{% endblock %}</title>
   <style>
     :root { --bg:#0d1117; --fg:#c9d1d9; --muted:#8b949e; --accent:#58a6ff; --danger:#f85149; --ok:#3fb950; --bd:#30363d; --card:#161b22; --sidebar-w:240px; --sidebar-w-collapsed:60px; --topbar-h:54px; }
     * { box-sizing: border-box; }
