@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.5 — browser tab title shows active tab
+
+- **`app/templates/base.html`** — `<title>` now renders as
+  `YgLicenseServer - <Tab>` (Dashboard, Customers, Events, …) instead of
+  just the tab name, so the Chrome tab is identifiable when switching
+  between sections / multiple browser tabs.
+
 ## v1.0.4 — VM systemd timer fix
 
 Config-only release. The container image is byte-identical to v1.0.3; this
