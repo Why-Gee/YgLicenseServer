@@ -202,6 +202,17 @@
       "allow_http_webhook": {{ 1 if lic.allow_http_webhook else 0 }}
     }{% if not loop.last %},{% endif %}
     {% endfor %}
+  ],
+  "feature_presets": [
+    {% for fp in feature_presets %}
+    {
+      "id": "{{ fp.id }}",
+      "key": {{ fp.key|tojson }},
+      "value_type": {{ fp.value_type|tojson }},
+      "default_value": {{ fp.default_value|tojson }},
+      "scope": {{ ('product' if fp.product_id else 'global')|tojson }}
+    }{% if not loop.last %},{% endif %}
+    {% endfor %}
   ]
 }
 </script>
@@ -264,29 +275,15 @@
       <div id="lm-valid-days-wrap"><label>Valid Days</label><input id="lm-valid-days" name="valid_days" type="number" value="365" min="1"></div>
       <div id="lm-valid-until-wrap" style="display:none;"><label>Valid Until</label><input id="lm-valid-until" name="valid_until" type="datetime-local"></div>
       <div style="grid-column:1/-1;">
-        <label>Features (JSON)</label>
-        <input id="lm-features" name="features_json" placeholder='{"premium": true, "trial": false}'>
-      </div>
-      {# First-class AI keys. These controls are authoritative for
-         features.ai_api_included / features.ai_included_usd_cap -- the
-         server merges them over the JSON above, and the edit prefill strips
-         them from the JSON field so they're only authored here. #}
-      <div style="grid-column:1/-1;">
-        <label style="display:inline-flex;align-items:center;gap:.4em;font-weight:normal;">
-          <input id="lm-ai-included" name="ai_api_included" type="checkbox" value="1"
-                 style="width:auto;margin:0;">
-          AI included (platform key)
+        <label>Features (JSON)
+          {# Structured editor: same data, typo-proof. Raw text input stays
+             authoritative -- the editor reads it on open and writes it back
+             on Apply; the form still posts only features_json. #}
+          <button type="button" id="lm-features-edit-btn" class="btn muted"
+                  style="margin-left:.5em;font-size:.75em;padding:.2em .55em;"
+                  title="Structured editor: edit keys/values or insert from feature presets without hand-typing JSON.">Edit…</button>
         </label>
-        <div style="display:flex;gap:.6em;align-items:center;margin-top:.3em;">
-          <label for="lm-ai-cap" style="margin:0;font-weight:normal;">Monthly USD cap</label>
-          <input id="lm-ai-cap" name="ai_included_usd_cap" type="number" min="0.01" step="any"
-                 placeholder="no cap" disabled style="max-width:10em;">
-        </div>
-        <small class="muted" style="display:block;margin-top:.2em;">
-          Written into the license JWT as <code>features.ai_api_included</code> +
-          <code>features.ai_included_usd_cap</code>. Un-ticking saves an explicit
-          <code>false</code> (audit-friendly) and clears the cap. Empty cap = no cap.
-        </small>
+        <input id="lm-features" name="features_json" placeholder='{"premium": true, "trial": false}'>
       </div>
       <div style="grid-column:1/-1;border-top:1px solid var(--bd);padding-top:.7em;margin-top:.3em;">
         <label style="margin-top:0;font-weight:600;color:var(--fg);">Webhook (Optional)
@@ -349,6 +346,43 @@
   </div>
 </div>
 
+{# Features structured editor. Above the license modal (1050) but below the
+   unsaved-changes confirm (1100). Reads lm-features on open, writes it back
+   on Apply -- the form still posts only features_json, so the server stays
+   a single code path for raw + structured authoring. #}
+<div id="features-editor" class="modal-overlay" style="display:none;z-index:1050;" role="dialog" aria-modal="true" aria-labelledby="fe-title">
+  <div class="modal-card" style="max-width:660px;">
+    <h3 id="fe-title" style="margin-top:0;">Edit Features</h3>
+    <p class="muted" style="font-size:.85em;margin:.3em 0 .6em;">
+      Keys land in the license JWT's <code>features</code> dict verbatim — the consuming
+      app defines what they mean. Insert from a preset to avoid typos; the value is
+      editable per license.
+    </p>
+    <div id="fe-invalid-warning" class="error" style="display:none;font-size:.85em;">
+      The current Features JSON doesn't parse, so the editor opened empty. Applying will
+      REPLACE the raw text. Cancel to keep hand-fixing the JSON instead.
+    </div>
+    <table style="margin:.5em 0;">
+      <thead><tr>
+        <th>Key</th><th style="width:7.5em;">Type</th><th>Value</th><th style="width:1%;"></th>
+      </tr></thead>
+      <tbody id="fe-rows"></tbody>
+    </table>
+    <div style="display:flex;gap:.6em;align-items:center;">
+      <button type="button" class="btn muted" id="fe-add" style="font-size:.85em;">+ Add key</button>
+      <select id="fe-preset-pick" style="width:auto;font-size:.85em;">
+        <option value="">Add from preset…</option>
+      </select>
+      <a href="/admin/presets" class="muted" style="font-size:.8em;margin-left:auto;">manage presets</a>
+    </div>
+    <div id="fe-error" class="error" style="display:none;margin-top:.7em;font-size:.85em;"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn muted" id="fe-cancel">Cancel</button>
+      <button type="button" class="btn" id="fe-apply">Apply</button>
+    </div>
+  </div>
+</div>
+
 {# Unsaved-changes confirm. z-index above the license modal so it sits on top. #}
 <div id="discard-confirm" class="modal-overlay" style="display:none;z-index:1100;" role="dialog" aria-modal="true" aria-labelledby="dc-title">
   <div class="modal-card" style="max-width:420px;">
@@ -390,8 +424,6 @@
   var validUntilWrap = document.getElementById('lm-valid-until-wrap');
   var validUntilIn = document.getElementById('lm-valid-until');
   var featIn = document.getElementById('lm-features');
-  var aiCb = document.getElementById('lm-ai-included');
-  var aiCapIn = document.getElementById('lm-ai-cap');
   var whIn = document.getElementById('lm-webhook-url');
   var sourceBadge = document.getElementById('lm-webhook-source');
   var sourceHint = document.getElementById('lm-webhook-source-hint');
@@ -442,11 +474,6 @@
       convertSelfBtn.style.display = 'none';
     }
   }
-
-  // Cap input only posts while the AI toggle is on -- a disabled input is
-  // omitted from the form payload, which the server reads as "no cap".
-  function syncAiCap() { aiCapIn.disabled = !aiCb.checked; }
-  aiCb.addEventListener('change', syncAiCap);
 
   // Save button = save + close. Apply = save + keep open. The auto-open
   // logic below honors a one-shot sessionStorage flag set by Save so the
@@ -549,8 +576,6 @@
         valid_days: validDaysIn.value,
         valid_until: validUntilIn.value,
         features_json: featIn.value,
-        ai_api_included: aiCb.checked,
-        ai_included_usd_cap: aiCapIn.value,
         webhook_url: whIn.value,
         allow_http_webhook: allowHttpCb.checked,
         rotate_secret: rotateCb.checked,
@@ -619,17 +644,7 @@
       validUntilIn.setAttribute('name', 'valid_until');
       validUntilIn.setAttribute('required', '');
       validUntilIn.value = lic.valid_until;
-      // Split the stored features: the two AI keys feed the dedicated
-      // controls and are stripped from the JSON field. On save the server
-      // re-merges the controls over the JSON, so the round-trip is exact.
-      var feats = {};
-      try { feats = JSON.parse(lic.features_json) || {}; } catch (e) { feats = {}; }
-      aiCb.checked = feats.ai_api_included === true;
-      aiCapIn.value = (typeof feats.ai_included_usd_cap === 'number') ? feats.ai_included_usd_cap : '';
-      delete feats.ai_api_included;
-      delete feats.ai_included_usd_cap;
-      featIn.value = JSON.stringify(feats);
-      syncAiCap();
+      featIn.value = lic.features_json;
       whIn.value = lic.webhook_url || '';
       renderSourceBadge(lic.webhook_url_source, !!lic.webhook_url, lic.id);
       allowHttpRow.style.display = '';
@@ -683,9 +698,6 @@
       validUntilIn.removeAttribute('name');
       validUntilIn.removeAttribute('required');
       featIn.value = '';
-      aiCb.checked = false;
-      aiCapIn.value = '';
-      syncAiCap();
       whIn.value = '';
       renderSourceBadge(null, false, null);
       allowHttpRow.style.display = '';
@@ -733,6 +745,186 @@
   if (closeAfter !== '1' && data.auto_open_lid && byId[data.auto_open_lid]) {
     open('edit', byId[data.auto_open_lid]);
   }
+  // ----- Features structured editor ---------------------------------------
+  // Same data as the raw lm-features input, typo-proof: rows of key/type/
+  // value plus a preset picker. Apply serializes back into the input (which
+  // trips the license modal's dirty guard exactly like hand-editing would).
+  (function () {
+    var feOv = document.getElementById('features-editor');
+    var feRows = document.getElementById('fe-rows');
+    var feErr = document.getElementById('fe-error');
+    var feWarn = document.getElementById('fe-invalid-warning');
+    var fePick = document.getElementById('fe-preset-pick');
+    var presets = data.feature_presets || [];
+    var presetById = {};
+
+    // Picker optgroups: global presets first, then this product's.
+    ['global', 'product'].forEach(function (scope) {
+      var items = presets.filter(function (p) { return p.scope === scope; });
+      if (!items.length) return;
+      var og = document.createElement('optgroup');
+      og.label = scope === 'global' ? 'Global' : slug;
+      items.forEach(function (p) {
+        presetById[p.id] = p;
+        var opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = p.key + ' (' + p.value_type + ')';
+        og.appendChild(opt);
+      });
+      fePick.appendChild(og);
+    });
+
+    function inferType(v) {
+      if (typeof v === 'boolean') return 'bool';
+      if (typeof v === 'number') return 'number';
+      if (typeof v === 'string') return 'string';
+      return 'json';
+    }
+
+    // isRaw=true means `value` is the previous control's raw string (type
+    // switch); false means it's a parsed JSON value (initial row build).
+    function valueControl(type, value, isRaw) {
+      var el;
+      if (type === 'bool') {
+        el = document.createElement('select');
+        ['true', 'false'].forEach(function (t) {
+          var o = document.createElement('option');
+          o.value = t; o.textContent = t; el.appendChild(o);
+        });
+        el.value = (value === true || value === 'true') ? 'true' : 'false';
+      } else if (type === 'number') {
+        el = document.createElement('input');
+        el.type = 'number'; el.step = 'any';
+        if (typeof value === 'number') el.value = value;
+        else if (isRaw && value !== '' && isFinite(Number(value))) el.value = value;
+      } else if (type === 'string') {
+        el = document.createElement('input');
+        el.type = 'text';
+        el.value = (typeof value === 'string') ? value : '';
+      } else {
+        el = document.createElement('input');
+        el.type = 'text';
+        if (isRaw) el.value = value || '';
+        else el.value = (value === undefined) ? '' : JSON.stringify(value);
+      }
+      el.className = 'fe-value';
+      return el;
+    }
+
+    function addRow(key, type, value) {
+      var tr = document.createElement('tr');
+      var tdK = document.createElement('td');
+      var keyEl = document.createElement('input');
+      keyEl.type = 'text'; keyEl.className = 'fe-key';
+      keyEl.value = key || ''; keyEl.placeholder = 'key';
+      tdK.appendChild(keyEl);
+      var tdT = document.createElement('td');
+      var typeEl = document.createElement('select');
+      typeEl.className = 'fe-type';
+      ['bool', 'number', 'string', 'json'].forEach(function (t) {
+        var o = document.createElement('option');
+        o.value = t; o.textContent = t; typeEl.appendChild(o);
+      });
+      typeEl.value = type;
+      tdT.appendChild(typeEl);
+      var tdV = document.createElement('td');
+      tdV.appendChild(valueControl(type, value, false));
+      typeEl.addEventListener('change', function () {
+        var old = tdV.firstChild ? tdV.firstChild.value : '';
+        tdV.innerHTML = '';
+        tdV.appendChild(valueControl(typeEl.value, old, true));
+      });
+      var tdX = document.createElement('td');
+      var rm = document.createElement('button');
+      rm.type = 'button'; rm.className = 'btn-icon';
+      rm.title = 'Remove key'; rm.setAttribute('aria-label', 'Remove key');
+      rm.textContent = '×'; rm.style.fontSize = '1.1em'; rm.style.lineHeight = '1';
+      rm.addEventListener('click', function () { tr.remove(); });
+      tdX.appendChild(rm);
+      tr.appendChild(tdK); tr.appendChild(tdT); tr.appendChild(tdV); tr.appendChild(tdX);
+      feRows.appendChild(tr);
+      return tr;
+    }
+
+    function openEditor() {
+      feRows.innerHTML = '';
+      feErr.style.display = 'none';
+      feWarn.style.display = 'none';
+      var feats = {};
+      var raw = featIn.value.trim();
+      if (raw && raw !== '{}') {
+        try {
+          feats = JSON.parse(raw);
+          if (!feats || typeof feats !== 'object' || Array.isArray(feats)) throw new Error('not an object');
+        } catch (e) { feats = {}; feWarn.style.display = ''; }
+      }
+      Object.keys(feats).forEach(function (k) {
+        addRow(k, inferType(feats[k]), feats[k]);
+      });
+      fePick.value = '';
+      feOv.style.display = '';
+      // Capture phase + stopPropagation so Escape closes ONLY this editor,
+      // not the license modal underneath (its handler is a bubble listener).
+      document.addEventListener('keydown', onFeKey, true);
+    }
+    function closeEditor() {
+      feOv.style.display = 'none';
+      document.removeEventListener('keydown', onFeKey, true);
+    }
+    function onFeKey(e) {
+      if (e.key === 'Escape') { e.stopPropagation(); closeEditor(); }
+    }
+
+    function applyEditor() {
+      var out = {};
+      var err = null;
+      Array.prototype.forEach.call(feRows.querySelectorAll('tr'), function (tr) {
+        if (err) return;
+        var key = tr.querySelector('.fe-key').value.trim();
+        var type = tr.querySelector('.fe-type').value;
+        var v = tr.querySelector('.fe-value').value;
+        if (!key) { err = 'every row needs a key'; return; }
+        if (Object.prototype.hasOwnProperty.call(out, key)) { err = 'duplicate key: ' + key; return; }
+        if (type === 'bool') {
+          out[key] = v === 'true';
+        } else if (type === 'number') {
+          var n = Number(v);
+          if (v.trim() === '' || !isFinite(n)) { err = 'key "' + key + '": value must be a finite number'; return; }
+          out[key] = n;
+        } else if (type === 'string') {
+          out[key] = v;
+        } else {
+          try { out[key] = JSON.parse(v); }
+          catch (e) { err = 'key "' + key + '": invalid JSON value'; return; }
+        }
+      });
+      if (err) { feErr.textContent = err; feErr.style.display = ''; return; }
+      featIn.value = JSON.stringify(out);
+      closeEditor();
+    }
+
+    document.getElementById('lm-features-edit-btn').addEventListener('click', openEditor);
+    document.getElementById('fe-add').addEventListener('click', function () {
+      var tr = addRow('', 'bool', true);
+      tr.querySelector('.fe-key').focus();
+    });
+    fePick.addEventListener('change', function () {
+      var p = presetById[fePick.value];
+      fePick.value = '';
+      if (!p) return;
+      // Key already present -> focus it instead of duplicating.
+      var keys = feRows.querySelectorAll('.fe-key');
+      for (var i = 0; i < keys.length; i++) {
+        if (keys[i].value.trim() === p.key) { keys[i].focus(); return; }
+      }
+      var tr = addRow(p.key, p.value_type, p.default_value);
+      tr.querySelector('.fe-value').focus();
+    });
+    document.getElementById('fe-cancel').addEventListener('click', closeEditor);
+    document.getElementById('fe-apply').addEventListener('click', applyEditor);
+    feOv.addEventListener('click', function (e) { if (e.target === feOv) closeEditor(); });
+  })();
+
   // (Flash query-params are stripped centrally in admin.js.)
 })();
 </script>

@@ -50,7 +50,7 @@ def test_alembic_upgrade_head_creates_all_tables(upgraded_db_url: str) -> None:
     tables = set(insp.get_table_names())
     expected = {
         "products", "customers", "licenses", "installs", "events",
-        "processed_stripe_events", "alembic_version",
+        "processed_stripe_events", "feature_presets", "alembic_version",
     }
     assert expected.issubset(tables), f"missing: {expected - tables}"
 

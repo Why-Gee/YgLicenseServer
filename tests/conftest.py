@@ -68,6 +68,8 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
     importlib.reload(svc_l)
     import app.services.customers as svc_c
     importlib.reload(svc_c)
+    import app.services.presets as svc_pre
+    importlib.reload(svc_pre)
     import app.services.check as svc_chk
     importlib.reload(svc_chk)
     import app.services.mfa as svc_mfa
@@ -89,6 +91,8 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
     importlib.reload(ui_dash)
     import app.routers.admin_ui.products as ui_prod
     importlib.reload(ui_prod)
+    import app.routers.admin_ui.presets as ui_pre
+    importlib.reload(ui_pre)
     import app.routers.admin_ui.licenses as ui_lic
     importlib.reload(ui_lic)
     import app.routers.admin_ui.customers as ui_cust

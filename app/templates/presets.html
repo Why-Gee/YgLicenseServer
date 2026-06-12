@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block title %}Feature Presets{% endblock %}
+{% block topbar_title %}Feature Presets{% endblock %}
+{% block content %}
+
+{% if request.query_params.get('created') %}
+<div class="success">preset created.</div>
+{% endif %}
+{% if request.query_params.get('edited') %}
+<div class="success">preset updated.</div>
+{% endif %}
+{% if request.query_params.get('deleted') %}
+<div class="success">deleted {{ request.query_params.get('deleted') }} preset(s). existing licenses keep any keys already inserted.</div>
+{% endif %}
+{% set _err = error_message(request.query_params.get('error')) %}
+{% if _err %}
+<div class="error">{{ _err }}</div>
+{% endif %}
+
+<div class="card">
+  <div style="display:flex;align-items:center;justify-content:space-between;">
+    <h2 style="margin:0;">Feature Presets</h2>
+    <button type="button" class="btn" id="fp-new-btn">+ New Preset</button>
+  </div>
+  <p class="muted" style="margin:.5em 0 0;">
+    Typo-safe templates for license <code>features</code> keys. A preset inserts its key +
+    default value into a license's features JSON from the license modal (the value is
+    editable per license). <strong>Global</strong> presets are offered on every product;
+    per-product ones only on theirs. LS attaches no meaning to any key — semantics belong
+    to the consuming app.
+  </p>
+
+  {% if presets %}
+  <form class="bulk-form" data-name="preset_ids" method="post"
+        action="/admin/presets/delete"
+        data-confirm1-title="Delete {n} preset(s)?"
+        data-confirm1-body="Removes the authoring template(s) only. Licenses that already carry these keys in their features JSON are NOT changed."
+        data-confirm2-title="Final confirmation"
+        data-confirm2-body="Delete the selected preset(s)? This cannot be undone (the template definition is not recoverable)."
+        data-confirm2-label="Delete {n} preset(s)">
+    {{ csrf_input(request) }}
+    <p style="margin:.5em 0;">
+      <button data-bulk-btn type="submit" class="btn danger" style="display:none">
+        Delete <span data-bulk-count>0</span> Selected
+      </button>
+    </p>
+    <table data-sortable>
+      <thead><tr>
+        <th style="width:1%;"><input type="checkbox" data-select-all title="Select All"></th>
+        <th data-sort-key="scope">Scope</th>
+        <th data-sort-key="key">Key</th>
+        <th data-sort-key="type">Type</th>
+        <th>Default</th>
+        <th data-sort-key="created" data-sort-type="date">Created</th>
+        <th style="width:1%;white-space:nowrap;"></th>
+      </tr></thead>
+      <tbody>
+      {% for fp in presets %}
+        <tr>
+          <td><input type="checkbox" name="preset_ids" value="{{ fp.id }}"></td>
+          <td>
+            {% if fp.product %}
+              <a href="/admin/products/{{ fp.product.slug }}"><code>{{ fp.product.slug }}</code></a>
+            {% else %}
+              <span class="badge active">global</span>
+            {% endif %}
+          </td>
+          <td><code>{{ fp.key }}</code></td>
+          <td>{{ fp.value_type }}</td>
+          <td><code>{{ fp.default_value|tojson }}</code></td>
+          <td class="muted">{{ fp.created_at.strftime('%Y-%m-%d') }}</td>
+          <td style="white-space:nowrap;">
+            <button type="button" class="btn-icon" title="Edit this preset" aria-label="Edit this preset"
+                    data-fp-edit="{{ fp.id }}"
+                    data-fp-key="{{ fp.key }}"
+                    data-fp-type="{{ fp.value_type }}"
+                    data-fp-default="{{ fp.default_value|tojson }}"
+                    data-fp-scope="{{ fp.product.slug if fp.product else 'global' }}">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325"/>
+              </svg>
+            </button>
+            <button type="submit" class="btn-icon"
+                    formaction="/admin/presets/{{ fp.id }}/delete"
+                    formnovalidate
+                    title="Delete this preset"
+                    aria-label="Delete this preset"
+                    data-confirm-title="Delete this preset?"
+                    data-confirm-body="Removes the authoring template only. Licenses already carrying '{{ fp.key }}' keep it."
+                    data-confirm-label="Delete">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M6.5 1h3a.5.5 0 0 1 .5.5v1H6v-1a.5.5 0 0 1 .5-.5zM11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3A1.5 1.5 0 0 0 5 1.5v1H1.5a.5.5 0 0 0 0 1h.538l.853 10.66A2 2 0 0 0 4.885 16h6.23a2 2 0 0 0 1.994-1.84l.853-10.66h.538a.5.5 0 0 0 0-1H11zM4.5 5.5a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 0a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3.5.5a.5.5 0 0 0-1 0v8a.5.5 0 0 0 1 0V6z"/>
+              </svg>
+            </button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </form>
+  {% else %}
+  <p class="muted">no presets yet — create one to make license feature authoring typo-proof.</p>
+  {% endif %}
+</div>
+
+{# Create / edit modal. Scope is fixed after creation (delete + recreate to
+   move scopes) so the audit trail stays honest about what existed where. #}
+<div id="fp-modal" class="modal-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="fp-title">
+  <div class="modal-card" style="max-width:460px;">
+    <h3 id="fp-title">New Preset</h3>
+    <form id="fp-form" method="post" action="/admin/presets">
+      {{ csrf_input(request) }}
+      <div id="fp-scope-row">
+        <label>Scope</label>
+        <select id="fp-scope" name="product_id">
+          <option value="">Global — all products</option>
+          {% for p in products %}
+          <option value="{{ p.id }}">{{ p.slug }} only</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div id="fp-scope-fixed" style="display:none;">
+        <label>Scope</label>
+        <input id="fp-scope-label" disabled>
+        <small class="muted">scope is fixed after creation — delete + recreate to move it.</small>
+      </div>
+      <div>
+        <label>Key</label>
+        <input id="fp-key" name="key" required maxlength="64"
+               pattern="[A-Za-z0-9_.\-]{1,64}"
+               placeholder="e.g. premium_support"
+               title="letters, digits, _ . - (max 64)">
+      </div>
+      <div>
+        <label>Type</label>
+        <select id="fp-type" name="value_type">
+          <option value="bool">bool</option>
+          <option value="number">number</option>
+          <option value="string">string</option>
+          <option value="json">json</option>
+        </select>
+      </div>
+      <div>
+        <label>Default value</label>
+        <input id="fp-default" name="default_value" required>
+        <small class="muted" id="fp-default-hint"></small>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn muted" id="fp-cancel">Cancel</button>
+        <button type="submit" class="btn" id="fp-submit">Create</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  var ov = document.getElementById('fp-modal');
+  var form = document.getElementById('fp-form');
+  var titleEl = document.getElementById('fp-title');
+  var scopeRow = document.getElementById('fp-scope-row');
+  var scopeSel = document.getElementById('fp-scope');
+  var scopeFixed = document.getElementById('fp-scope-fixed');
+  var scopeLabel = document.getElementById('fp-scope-label');
+  var keyIn = document.getElementById('fp-key');
+  var typeSel = document.getElementById('fp-type');
+  var defIn = document.getElementById('fp-default');
+  var hint = document.getElementById('fp-default-hint');
+  var submitBtn = document.getElementById('fp-submit');
+
+  var HINTS = {
+    bool: 'true or false',
+    number: 'e.g. 25 or 12.5',
+    string: 'raw text, no quotes needed',
+    json: 'any valid JSON, e.g. {"tier": "gold"} or [1,2]',
+  };
+  function syncHint() { hint.textContent = HINTS[typeSel.value] || ''; }
+  typeSel.addEventListener('change', syncHint);
+
+  function open(mode, btn) {
+    if (mode === 'edit') {
+      titleEl.textContent = 'Edit Preset';
+      submitBtn.textContent = 'Save';
+      form.action = '/admin/presets/' + btn.dataset.fpEdit + '/edit';
+      scopeRow.style.display = 'none';
+      scopeSel.removeAttribute('name');   // edit endpoint doesn't take scope
+      scopeFixed.style.display = '';
+      scopeLabel.value = btn.dataset.fpScope;
+      keyIn.value = btn.dataset.fpKey;
+      typeSel.value = btn.dataset.fpType;
+      // default_value round-trips as the raw-string form the server parses:
+      // strings go verbatim (unquoted); everything else as JSON text.
+      var dv = JSON.parse(btn.dataset.fpDefault);
+      defIn.value = (btn.dataset.fpType === 'string') ? dv : JSON.stringify(dv);
+    } else {
+      titleEl.textContent = 'New Preset';
+      submitBtn.textContent = 'Create';
+      form.action = '/admin/presets';
+      scopeRow.style.display = '';
+      scopeSel.setAttribute('name', 'product_id');
+      scopeSel.value = '';
+      scopeFixed.style.display = 'none';
+      keyIn.value = '';
+      typeSel.value = 'bool';
+      defIn.value = 'false';
+    }
+    syncHint();
+    ov.style.display = '';
+    document.addEventListener('keydown', onKey);
+    setTimeout(function () { keyIn.focus(); }, 50);
+  }
+  function close() {
+    ov.style.display = 'none';
+    document.removeEventListener('keydown', onKey);
+  }
+  function onKey(e) { if (e.key === 'Escape') close(); }
+
+  document.getElementById('fp-new-btn').addEventListener('click', function () { open('create', null); });
+  document.querySelectorAll('[data-fp-edit]').forEach(function (btn) {
+    btn.addEventListener('click', function () { open('edit', btn); });
+  });
+  document.getElementById('fp-cancel').addEventListener('click', close);
+  ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+})();
+</script>
+{% endblock %}

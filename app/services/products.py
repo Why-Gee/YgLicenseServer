@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import webhooks as wh
 from app.keystore import encrypt_secret
-from app.models import Event, License, Product
+from app.models import Event, FeaturePreset, License, Product
 from app.services.errors import Conflict, NotFound, ValidationFailed
 from app.signing import generate_keypair
 
@@ -127,6 +127,9 @@ def delete_product(
         note="service/delete",
     ))
     db.query(Event).filter_by(product_id=p.id).update({"product_id": None})
+    # Per-product feature presets are authoring templates owned by the
+    # product -- they go with it (FK would dangle on Postgres otherwise).
+    db.query(FeaturePreset).filter_by(product_id=p.id).delete()
     db.delete(p)
     db.commit()
     for _snap, delivery_id in pairs:
