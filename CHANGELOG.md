@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.1.0 — first-class AI feature keys (`ai_api_included`, `ai_included_usd_cap`)
+
+ASM's license-bundled AI auto-provisioning reads two keys from the license
+JWT's `features` dict: `ai_api_included` (bool — gates the "use platform AI
+key" path) and `ai_included_usd_cap` (number, optional — default monthly USD
+allowance). Both were already expressible via the free-form features JSON;
+this release gives them first-class authoring:
+
+- **Admin UI license modal** — "AI included (platform key)" checkbox +
+  "Monthly USD cap" number input (enabled only while ticked; empty = no
+  cap). The edit prefill moves the two keys out of the Features (JSON)
+  field into the dedicated controls; on save the controls win over
+  hand-typed JSON.
+- **Explicit `false` on toggle-off.** Un-ticking the checkbox saves
+  `ai_api_included: false` rather than removing the key — ASM treats absent
+  as false, but explicit false reads better in audit trails and decoded
+  JWTs.
+- **JSON API** — `POST /v1/admin/products/{slug}/licenses` accepts optional
+  `ai_api_included` / `ai_included_usd_cap` fields that override the
+  `features` dict. Omitted = `features` stays authoritative (back-compat).
+  Cap without toggle, cap ≤ 0, or non-finite cap → 400.
+- **Renewals preserve the keys** — Stripe `invoice.paid` extends the
+  existing license row, leaving `features` untouched; now pinned by test.
+- **Test-infra fix:** `tests/conftest.py` reload chain was missing
+  `app.license_keys`, so non-alphabetical test subsets could pin a stale
+  `get_settings` and die with "LICENSE_KEY_PEPPER is unset".
+
+No schema or wire-format changes (`features` was already a JSON column);
+safe drop-in upgrade from v1.0.5. The plaintext-`key`-column drop slated
+for v1.1 did NOT happen in this release; comments updated.
+
 ## v1.0.5 — browser tab title shows active tab
 
 - **`app/templates/base.html`** — `<title>` now renders as

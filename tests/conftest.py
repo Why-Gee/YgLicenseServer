@@ -46,6 +46,13 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
     importlib.reload(wh)
     import app.keystore as ks
     importlib.reload(ks)
+    # license_keys captures get_settings at import; without this reload, a
+    # test module that imports the app chain BEFORE the first client fixture
+    # (e.g. service-level unit tests) pins a get_settings whose lru_cache was
+    # populated at pytest collection time -- when no env was set -- and every
+    # later hash_key() call dies with "LICENSE_KEY_PEPPER is unset".
+    import app.license_keys as lk
+    importlib.reload(lk)
     import app.signing as sg
     importlib.reload(sg)
     # Reset the rate-limiter's in-memory buckets between tests so one test's

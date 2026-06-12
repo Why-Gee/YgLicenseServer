@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -36,6 +37,54 @@ def _run(fn: Callable[[], None], schedule: Scheduler | None) -> None:
         schedule(fn)
 
 
+# ----- AI feature keys ---------------------------------------------------
+# First-class `features` keys consumed by ASM's license-bundled AI
+# auto-provisioning. ASM treats a missing ai_api_included as false; the
+# authoring paths below still always write it explicitly so audit trails
+# (and decoded JWTs) show intent rather than absence.
+
+AI_INCLUDED_KEY = "ai_api_included"
+AI_USD_CAP_KEY = "ai_included_usd_cap"
+
+
+def parse_usd_cap(raw: str) -> float | None:
+    """Parse the ai_included_usd_cap form field. Empty = no cap.
+    Range/finiteness rules live in apply_ai_features — this only converts."""
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError as e:
+        raise ValidationFailed("invalid ai usd cap") from e
+
+
+def apply_ai_features(
+    features: dict, *,
+    ai_api_included: bool,
+    ai_included_usd_cap: float | None,
+) -> dict:
+    """Normalize the two AI keys into `features` (mutates + returns it).
+
+    `ai_api_included` is always written explicitly — un-ticking the toggle
+    emits `false` rather than deleting the key. The cap is only meaningful
+    while AI is included: providing one without the toggle is an error (not
+    a silent drop — API callers should hear about it), and toggling off
+    removes any stored cap.
+    """
+    if ai_included_usd_cap is not None:
+        if not ai_api_included:
+            raise ValidationFailed("ai cap requires ai included")
+        if not math.isfinite(ai_included_usd_cap) or ai_included_usd_cap <= 0:
+            raise ValidationFailed("invalid ai usd cap")
+    features[AI_INCLUDED_KEY] = bool(ai_api_included)
+    if ai_api_included and ai_included_usd_cap is not None:
+        features[AI_USD_CAP_KEY] = ai_included_usd_cap
+    else:
+        features.pop(AI_USD_CAP_KEY, None)
+    return features
+
+
 # ----- issuance ---------------------------------------------------------
 
 
@@ -56,6 +105,8 @@ def issue_license(
     max_users: int = 10,
     valid_days: int = 365,
     features: dict | None = None,
+    ai_api_included: bool | None = None,
+    ai_included_usd_cap: float | None = None,
     webhook_url: str | None = None,
     allow_http_webhook: bool = False,
     stripe_customer_id: str | None = None,
@@ -66,7 +117,20 @@ def issue_license(
     when provided), creates them if absent, generates the key, optionally
     configures a webhook (mints a fresh secret). Caller decides whether to
     fire the resend email — UI handlers historically didn't, JSON API does.
+
+    `ai_api_included=None` means the caller authors `features` directly (the
+    Stripe path and pre-existing JSON callers). A bool — including False —
+    normalizes the AI keys into `features` via apply_ai_features.
     """
+    # Validate/merge AI keys before any DB work so a rejection has no side
+    # effects (no customer row created for a request that 400s).
+    features = dict(features or {})
+    if ai_api_included is not None or ai_included_usd_cap is not None:
+        apply_ai_features(
+            features,
+            ai_api_included=bool(ai_api_included),
+            ai_included_usd_cap=ai_included_usd_cap,
+        )
     name_clean = (name or "").strip() or None
     if stripe_customer_id is not None:
         cust = db.query(Customer).filter_by(stripe_customer_id=stripe_customer_id).one_or_none()
@@ -95,12 +159,12 @@ def issue_license(
     lic = License(
         product_id=product.id,
         customer_id=cust.id,
-        key=key,                           # deprecated; will drop in v1.1
+        key=key,                           # deprecated; drop in a later release
         key_hash=hash_key(key),
         key_display=make_display(key),
         plan=plan,
         max_users=max_users,
-        features=features or {},
+        features=features,
         valid_until=_utcnow() + timedelta(days=valid_days),
         status="active",
         webhook_url=webhook_url_clean,
@@ -245,6 +309,8 @@ def edit_license(
     max_users: int,
     valid_until_raw: str,
     features_json: str = "{}",
+    ai_api_included: bool | None = None,
+    ai_included_usd_cap: float | None = None,
     webhook_url: str = "",
     allow_http_webhook: bool | None = None,
     rotate_secret: bool = False,
@@ -257,6 +323,10 @@ def edit_license(
     server), so renaming the customer from a license-edit form would silently
     rename the same person on every other product. Rename via the dedicated
     /admin/customers/{id}/edit endpoint instead.
+
+    The AI params follow issue_license semantics: None = features_json is
+    authoritative; a bool overrides the two AI keys in the parsed dict (the
+    form's dedicated controls win over hand-typed JSON).
     """
     try:
         features = json.loads(features_json) if features_json.strip() else {}
@@ -264,6 +334,12 @@ def edit_license(
             raise ValueError
     except (ValueError, json.JSONDecodeError) as e:
         raise ValidationFailed("invalid features json") from e
+    if ai_api_included is not None or ai_included_usd_cap is not None:
+        apply_ai_features(
+            features,
+            ai_api_included=bool(ai_api_included),
+            ai_included_usd_cap=ai_included_usd_cap,
+        )
     try:
         # HTML <input type="date"> posts YYYY-MM-DD. datetime-local posts
         # YYYY-MM-DDTHH:MM. Accept either.

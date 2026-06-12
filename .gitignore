@@ -20,3 +20,4 @@ logs/
 .local-fix.sh
 .claude/
 .claude_recovery_handoff.txt
+.autopilot/
