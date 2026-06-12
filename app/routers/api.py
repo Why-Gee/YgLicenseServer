@@ -215,6 +215,12 @@ class IssueIn(BaseModel):
     plan: str = "standard"
     max_users: int = 10
     features: dict = {}
+    # First-class AI keys (consumed by ASM license-bundled AI provisioning).
+    # None = `features` is authoritative (back-compat). A bool — including
+    # False — overrides features["ai_api_included"] explicitly; the cap is
+    # only accepted alongside ai_api_included=True and must be > 0.
+    ai_api_included: bool | None = None
+    ai_included_usd_cap: float | None = None
     valid_days: int = 365
     webhook_url: str | None = None
     allow_http_webhook: bool = False
@@ -238,17 +244,22 @@ def admin_issue(slug: str, body: IssueIn, db: Session = Depends(get_db)) -> Issu
         p = products_svc.get_product(db, slug)
     except NotFound as e:
         raise HTTPException(status_code=404, detail="product not found") from e
-    result = licenses_svc.issue_license(
-        db, product=p,
-        email=body.email, name=body.name,
-        plan=body.plan, max_users=body.max_users,
-        valid_days=body.valid_days, features=body.features,
-        webhook_url=body.webhook_url,
-        allow_http_webhook=body.allow_http_webhook,
-        stripe_customer_id=body.stripe_customer_id,
-        note="admin/issue",
-        send_email=True,
-    )
+    try:
+        result = licenses_svc.issue_license(
+            db, product=p,
+            email=body.email, name=body.name,
+            plan=body.plan, max_users=body.max_users,
+            valid_days=body.valid_days, features=body.features,
+            ai_api_included=body.ai_api_included,
+            ai_included_usd_cap=body.ai_included_usd_cap,
+            webhook_url=body.webhook_url,
+            allow_http_webhook=body.allow_http_webhook,
+            stripe_customer_id=body.stripe_customer_id,
+            note="admin/issue",
+            send_email=True,
+        )
+    except ValidationFailed as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return IssueOut(
         license_id=result.license.id, key=result.license.key,
         valid_until=result.license.valid_until, product=p.slug,
