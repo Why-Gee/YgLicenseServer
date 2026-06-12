@@ -21,3 +21,4 @@ logs/
 .claude/
 .claude_recovery_handoff.txt
 .autopilot/
+/backups/

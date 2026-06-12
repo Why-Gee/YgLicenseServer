@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily YgLicenseServer in-app backup (logical dump + retention)
+Requires=yg-license-app-backup.service
+
+[Timer]
+# 02:47 UTC daily — before the raw GCS snapshot at 03:17 so both layers
+# capture the same day's state; offset from the hour to dodge stampedes.
+OnCalendar=*-*-* 02:47:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

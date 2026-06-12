@@ -47,6 +47,28 @@ class LoginRequired(Exception):
 # render `{{ error_message(request.query_params.get('error')) }}` so a
 # crafted ?error=<script> can't even show as raw text.
 ERROR_MESSAGES = {
+    "backup decrypt failed": (
+        "Couldn't decrypt that backup — it was encrypted under a different "
+        "LICENSE_KEY_ENCRYPTION_KEY than this server's."
+    ),
+    "backup encrypted but no kek": (
+        "That backup is encrypted, but this server has no "
+        "LICENSE_KEY_ENCRYPTION_KEY configured to decrypt it."
+    ),
+    "backup schema version mismatch": (
+        "Backup was taken on a different database schema revision — run the "
+        "matching server version (alembic) before restoring it."
+    ),
+    "backup too large": "Uploaded file exceeds the restore size limit.",
+    "invalid backup filename": "Unknown backup file.",
+    "no backups selected": "No backups were selected.",
+    "not a recognized backup file": "That file isn't a YgLicenseServer backup archive.",
+    "restore confirmation mismatch": (
+        "Confirmation phrase didn't match — nothing was restored."
+    ),
+    "unsupported backup format version": (
+        "Backup uses a newer archive format than this server understands."
+    ),
     "email already used by another customer": "That email is already used by another customer.",
     "email required": "Email is required.",
     "invalid features json": "Features JSON was not a valid object.",
@@ -72,6 +94,13 @@ ERROR_MESSAGES = {
 
 # Service-exception messages -> stable UI error codes (used in ?error=<code>).
 SERVICE_ERR_TO_CODE: dict[str, str] = {
+    "backup decrypt failed": "backup+decrypt+failed",
+    "backup encrypted but no kek": "backup+encrypted+but+no+kek",
+    "backup schema version mismatch": "backup+schema+version+mismatch",
+    "invalid backup filename": "invalid+backup+filename",
+    "not a recognized backup file": "not+a+recognized+backup+file",
+    "restore confirmation mismatch": "restore+confirmation+mismatch",
+    "unsupported backup format version": "unsupported+backup+format+version",
     "slug already exists": "slug+exists",
     "invalid slug (lowercase a-z0-9-, max 63)": "invalid+slug",
     "invalid key_prefix (lowercase a-z0-9_, max 15)": "invalid+key_prefix",
