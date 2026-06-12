@@ -1,0 +1,20 @@
+[Unit]
+Description=YgLicenseServer in-app backup (logical dump -> /data/backups [+ S3])
+After=network-online.target yg-license-server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs python -m app.scripts.run_backup inside the same container image the
+# server runs. --entrypoint python overrides docker-entrypoint.sh which
+# would otherwise prepend `uvicorn app.main:app ...` and trip on `-m`
+# (see CHANGELOG v1.0.4). Same /data volume = same SQLite DB + the archive
+# directory (BACKUP_DIR defaults to ./backups in-app; the env file pins it
+# to /data/backups on the VM so archives land on the persistent disk).
+ExecStart=/usr/bin/docker run --rm \
+  --env-file /etc/yg-license-server/yg-license-server.env \
+  -e BACKUP_DIR=/data/backups \
+  -v /var/lib/yg-license-server:/data \
+  --entrypoint python \
+  ghcr.io/why-gee/yg-license-server:latest \
+  -m app.scripts.run_backup

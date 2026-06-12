@@ -24,6 +24,8 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
         "SESSION_SECRET": "test-session",
         "COOKIE_SECURE": "false",
         "LICENSE_KEY_PEPPER": "phase4_test_pepper_" + "x" * 32,
+        # Per-test backup dir; the default ./backups would pollute the repo.
+        "BACKUP_DIR": str(tmp_path / "backups"),
     }
     base.update(env)
     for k, v in base.items():
@@ -70,6 +72,12 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
     importlib.reload(svc_c)
     import app.services.presets as svc_pre
     importlib.reload(svc_pre)
+    import app.backup as bk
+    importlib.reload(bk)
+    import app.backup_s3 as bks3
+    importlib.reload(bks3)
+    import app.services.backups as svc_bak
+    importlib.reload(svc_bak)
     import app.services.check as svc_chk
     importlib.reload(svc_chk)
     import app.services.mfa as svc_mfa
@@ -93,6 +101,8 @@ def _build_client(monkeypatch, tmp_path, **env: str) -> TestClient:
     importlib.reload(ui_prod)
     import app.routers.admin_ui.presets as ui_pre
     importlib.reload(ui_pre)
+    import app.routers.admin_ui.backups as ui_bak
+    importlib.reload(ui_bak)
     import app.routers.admin_ui.licenses as ui_lic
     importlib.reload(ui_lic)
     import app.routers.admin_ui.customers as ui_cust

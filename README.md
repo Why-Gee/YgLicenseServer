@@ -161,11 +161,30 @@ Branch protection on `main` (one-time setup in GitHub: *Settings → Branches �
 
 The DB holds every product's private key. Lose it and every license stops verifying.
 
+**In-app backup/restore (v1.3+, recommended):** the admin UI's **Backups** page
+takes a logical dump of the whole server state (engine-agnostic — a SQLite
+backup restores onto Postgres and vice versa), encrypted under a key derived
+from `LICENSE_KEY_ENCRYPTION_KEY` when set. Manual "Back Up Now" + download,
+typed-phrase-confirmed full-replace restore (a pre-restore safety snapshot is
+saved first), and scheduled runs via:
+
 ```sh
-# daily cron
+python -m app.scripts.run_backup    # local BACKUP_DIR always; S3 when BACKUP_S3_BUCKET is set
+```
+
+Destinations + retention via env: `BACKUP_DIR` (default `./backups`),
+`BACKUP_S3_BUCKET` / `BACKUP_S3_ENDPOINT` / `BACKUP_S3_REGION` /
+`BACKUP_S3_ACCESS_KEY` / `BACKUP_S3_SECRET_KEY` / `BACKUP_S3_PREFIX`
+(endpoint-configurable: AWS, R2, MinIO, GCS interop),
+`BACKUP_RETENTION_COUNT` (default 14) / `BACKUP_RETENTION_DAYS`. The GCP
+deploy installs a daily systemd timer (`yg-license-app-backup.timer`).
+
+**Infra-level snapshot (belt and braces):** keep a raw DB copy off-host too —
+the GCP deploy's `yg-license-backup.timer` ships a nightly SQLite snapshot to
+GCS, or roll your own:
+
+```sh
 sqlite3 /data/license.db ".backup '/backups/license-$(date -u +%F).db'"
 # or for postgres
 pg_dump $DATABASE_URL > /backups/license-$(date -u +%F).sql
 ```
-
-Keep at least one off-host copy.

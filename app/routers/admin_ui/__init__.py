@@ -5,6 +5,7 @@ plumbing (templates, session auth, CSRF) lives in `_deps`.
 """
 from app.routers.admin_ui import (
     auth,
+    backups,
     customers,
     dashboard,
     events,
@@ -25,6 +26,7 @@ ALL_ROUTERS = [
     customers.router,
     events.router,
     webhook_deliveries.router,
+    backups.router,
     mfa.router,
 ]
 

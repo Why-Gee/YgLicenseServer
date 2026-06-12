@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.3.0 — in-app backup/restore (local + S3, manual + scheduled)
+
+Operator-facing backup layer (the raw VM→GCS snapshot from v0.11 stays as
+infra-level disaster recovery underneath):
+
+- **Archive format:** logical dump of every table (manifest + JSONL per
+  table, tar.gz) — engine-agnostic in BOTH directions (SQLite ⇄ Postgres),
+  stamped with `app_version` + `alembic_version`. Restore refuses schema
+  mismatches instead of corrupting.
+- **Encryption:** when `LICENSE_KEY_ENCRYPTION_KEY` is set, archives are
+  Fernet-encrypted under an HKDF-derived backup key (domain-separated from
+  the KEK). `.lsbak` = encrypted, `.tar.gz` = plaintext dev mode (UI warns).
+- **Admin UI "Backups" page:** Back Up Now, download, per-row + bulk delete,
+  restore from a stored archive or an uploaded file. Restore is full-replace,
+  gated by typing `RESTORE LICENSE SERVER`, and ALWAYS writes a local
+  `pre-restore_` safety snapshot first — a bad restore is one more restore
+  from undone. Audit events `backup:created` / `backup:restored`.
+- **Scheduled:** `python -m app.scripts.run_backup` (new daily systemd timer
+  `yg-license-app-backup.timer` in the GCP deploy) + retention sweep:
+  `BACKUP_RETENTION_COUNT` (default 14) / `BACKUP_RETENTION_DAYS`;
+  pre-restore snapshots are never auto-pruned.
+- **Destinations:** local `BACKUP_DIR` (VM: `/data/backups`) always; optional
+  S3-compatible upload (`BACKUP_S3_*` env — AWS/R2/MinIO/GCS-interop via
+  configurable endpoint, boto3 lazy-imported). S3 failure is best-effort:
+  logged + surfaced, never kills the backup.
+- New dependency: `boto3`.
+
 ## v1.2.0 — feature presets; LS back to 100% product-agnostic
 
 v1.1.0 hardcoded two consumer-specific (ASM) feature keys into the generic
