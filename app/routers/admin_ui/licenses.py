@@ -32,8 +32,6 @@ def license_issue(
     max_users: int = Form(10),
     valid_days: int = Form(365),
     features_json: str = Form("{}"),
-    ai_api_included: str = Form(""),
-    ai_included_usd_cap: str = Form(""),
     webhook_url: str = Form(""),
     allow_http_webhook: str = Form(""),
     csrf_token: str = Form(""),
@@ -58,11 +56,6 @@ def license_issue(
             db, product=p, email=email, name=customer_name,
             plan=plan, max_users=max_users, valid_days=valid_days,
             features=features,
-            # Checkbox semantics: absent/empty = explicit False (never None) —
-            # the form always authors the toggle, so toggle-off writes
-            # ai_api_included: false into features rather than omitting it.
-            ai_api_included=(ai_api_included == "1"),
-            ai_included_usd_cap=licenses_svc.parse_usd_cap(ai_included_usd_cap),
             webhook_url=webhook_url or None,
             allow_http_webhook=(allow_http_webhook == "1"),
             note="ui/issue",
@@ -92,8 +85,6 @@ def license_edit(
     max_users: int = Form(...),
     valid_until: str = Form(...),
     features_json: str = Form("{}"),
-    ai_api_included: str = Form(""),
-    ai_included_usd_cap: str = Form(""),
     webhook_url: str = Form(""),
     allow_http_webhook: str = Form(""),
     rotate_secret: str = Form(""),
@@ -116,10 +107,6 @@ def license_edit(
             db, lic,
             plan=plan, max_users=max_users, valid_until_raw=valid_until,
             features_json=features_json,
-            # Same checkbox semantics as issue: absent = explicit False, so
-            # un-ticking the toggle persists ai_api_included: false.
-            ai_api_included=(ai_api_included == "1"),
-            ai_included_usd_cap=licenses_svc.parse_usd_cap(ai_included_usd_cap),
             webhook_url=webhook_url,
             allow_http_webhook=(allow_http_webhook == "1") if allow_http_webhook else None,
             rotate_secret=rotate_secret == "1",

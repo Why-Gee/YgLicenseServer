@@ -195,9 +195,15 @@ def product_detail(
         base, cursor_col=(License.created_at, License.id),
         cursor=cursor, limit=DEFAULT_LIMIT,
     )
+    from app.services import presets as presets_svc
     return templates.TemplateResponse(
         request, "product_detail.html",
-        {"product": p, "licenses": page.items, "next_cursor": page.next_cursor},
+        {
+            "product": p, "licenses": page.items, "next_cursor": page.next_cursor,
+            # Global + this product's presets, for the license modal's
+            # features editor picker.
+            "feature_presets": presets_svc.presets_for_product(db, p.id),
+        },
     )
 
 

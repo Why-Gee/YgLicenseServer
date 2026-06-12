@@ -47,13 +47,16 @@ class LoginRequired(Exception):
 # render `{{ error_message(request.query_params.get('error')) }}` so a
 # crafted ?error=<script> can't even show as raw text.
 ERROR_MESSAGES = {
-    "ai cap requires ai included": (
-        'AI monthly USD cap only applies when "AI included" is ticked.'
-    ),
     "email already used by another customer": "That email is already used by another customer.",
     "email required": "Email is required.",
-    "invalid ai usd cap": "AI monthly USD cap must be a positive number.",
     "invalid features json": "Features JSON was not a valid object.",
+    "invalid preset key": (
+        "Preset key must be 1–64 characters of letters, digits, _ . or -."
+    ),
+    "invalid preset type": "Preset type must be bool, number, string, or json.",
+    "invalid preset value": "Default value doesn't match the selected type.",
+    "no presets selected": "No presets were selected.",
+    "preset exists": "A preset with that key already exists in this scope.",
     "invalid key_prefix": "Key prefix must be lowercase a–z 0–9 _, max 15 characters.",
     "invalid slug": "Slug must be lowercase a–z 0–9 –, max 63 characters.",
     "invalid valid_until": "Could not parse Valid Until date.",
@@ -73,8 +76,10 @@ SERVICE_ERR_TO_CODE: dict[str, str] = {
     "invalid slug (lowercase a-z0-9-, max 63)": "invalid+slug",
     "invalid key_prefix (lowercase a-z0-9_, max 15)": "invalid+key_prefix",
     "invalid features json": "invalid+features+json",
-    "invalid ai usd cap": "invalid+ai+usd+cap",
-    "ai cap requires ai included": "ai+cap+requires+ai+included",
+    "invalid preset key": "invalid+preset+key",
+    "invalid preset type": "invalid+preset+type",
+    "invalid preset value": "invalid+preset+value",
+    "preset exists": "preset+exists",
     "invalid valid_until": "invalid+valid_until",
     "unsafe webhook url": "unsafe+webhook+url",
     "no webhook configured": "no+webhook+configured",

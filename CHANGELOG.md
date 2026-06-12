@@ -1,5 +1,34 @@
 # Changelog
 
+## v1.2.0 — feature presets; LS back to 100% product-agnostic
+
+v1.1.0 hardcoded two consumer-specific (ASM) feature keys into the generic
+authoring surface. That coupling is removed and replaced with a generic
+mechanism that gives the same typo-safety for ANY key, any product:
+
+- **Feature presets** (new `feature_presets` table + `/admin/presets` page):
+  key + value type (bool / number / string / json) + default value. Scope is
+  **global** (offered on every product's licenses) or **per-product**.
+  Per-row trash + bulk-select, create/edit modal. Audit events
+  (`preset:created/updated/deleted`). Deleting a preset never touches
+  licenses — it's an authoring template, not a live reference. Deleting a
+  product cascades its presets.
+- **Structured features editor** in the license modal ("Edit…" next to
+  Features JSON): rows of key / type / value, add keys manually or insert
+  from a preset (default value editable per license). Serializes back into
+  the raw JSON input — the server keeps a single `features_json` code path
+  and the raw input stays fully hand-editable.
+- **Removed (breaking, shipped <1 day in v1.1.0):** `ai_api_included` /
+  `ai_included_usd_cap` top-level fields on
+  `POST /v1/admin/products/{slug}/licenses`, the hardcoded "AI included"
+  modal controls, and all related service-layer semantics (explicit-false,
+  cap validation). Unknown body fields are ignored; pass such keys inside
+  `features` instead. LS attaches no semantics to any features key — that's
+  the consuming app's job (e.g. ASM reads `ai_api_included` /
+  `ai_included_usd_cap` from the JWT; add those as presets via the UI).
+- Existing licenses and issued JWTs are unaffected (`features` was always
+  the stored shape). Alembic migration `3f8b2c91d4ae` (additive only).
+
 ## v1.1.0 — first-class AI feature keys (`ai_api_included`, `ai_included_usd_cap`)
 
 ASM's license-bundled AI auto-provisioning reads two keys from the license

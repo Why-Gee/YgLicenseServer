@@ -11,15 +11,19 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import (
     JSON,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
+    text,
 )
 from sqlalchemy import event as sa_event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -171,6 +175,49 @@ class License(Base):
     installs: Mapped[list[Install]] = relationship(
         back_populates="license", cascade="all, delete-orphan"
     )
+
+
+class FeaturePreset(Base):
+    """Admin-defined authoring template for a license `features` key.
+
+    Pure authoring affordance: LS attaches NO semantics to any features key
+    (the dict is opaque, consumer-owned). Presets exist so admins insert
+    keys into the per-license features JSON typo-free, with a sane default
+    value they can override per license.
+
+    product_id NULL = global preset (offered on every product's licenses);
+    set = offered only on that product's licenses. Per-product uniqueness is
+    the UniqueConstraint; global uniqueness needs the partial index below
+    because both SQLite and Postgres treat NULLs as distinct in a plain
+    UNIQUE constraint.
+    """
+
+    __tablename__ = "feature_presets"
+    __table_args__ = (
+        CheckConstraint(
+            "value_type IN ('bool','number','string','json')",
+            name="ck_feature_presets_value_type",
+        ),
+        UniqueConstraint("product_id", "key", name="uq_feature_presets_product_key"),
+        Index(
+            "uq_feature_presets_global_key", "key", unique=True,
+            sqlite_where=text("product_id IS NULL"),
+            postgresql_where=text("product_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    product_id: Mapped[str | None] = mapped_column(
+        ForeignKey("products.id"), nullable=True, index=True,
+    )
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    value_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Any JSON-serializable value; shape-validated against value_type at
+    # authoring time (services.presets), never interpreted by LS.
+    default_value: Mapped[Any] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
+
+    product: Mapped[Product | None] = relationship()
 
 
 class Install(Base):

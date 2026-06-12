@@ -10,6 +10,7 @@ from app.routers.admin_ui import (
     events,
     licenses,
     mfa,
+    presets,
     products,
     webhook_deliveries,
 )
@@ -20,6 +21,7 @@ ALL_ROUTERS = [
     dashboard.router,
     products.router,
     licenses.router,
+    presets.router,
     customers.router,
     events.router,
     webhook_deliveries.router,
