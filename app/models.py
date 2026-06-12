@@ -156,7 +156,8 @@ class License(Base):
     # v1.0+: BLAKE2b-keyed hash of the plaintext key. /v1/check looks up
     # licenses by this column, not by the plaintext. The plaintext column
     # is retained for one release (deprecated) so an in-place migration
-    # rollback is possible; drop in v1.1.
+    # rollback is possible; drop in a later release (was slated for v1.1,
+    # which shipped the AI feature keys instead).
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     # Truncated prefix+tail safe to show anywhere. `<prefix>_<first6>…<last4>`.
     key_display: Mapped[str] = mapped_column(String(32), nullable=False)

@@ -159,7 +159,7 @@ def issue_license(
     lic = License(
         product_id=product.id,
         customer_id=cust.id,
-        key=key,                           # deprecated; will drop in v1.1
+        key=key,                           # deprecated; drop in a later release
         key_hash=hash_key(key),
         key_display=make_display(key),
         plan=plan,
