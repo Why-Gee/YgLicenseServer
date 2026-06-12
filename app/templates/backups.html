@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Backups{% endblock %}
+{% block topbar_title %}Backups{% endblock %}
+{% block content %}
+
+{% if request.query_params.get('created') %}
+<div class="success">
+  backup created: <code>{{ request.query_params.get('created') }}</code>
+  {% if request.query_params.get('s3_failed') %}
+  — <strong>S3 upload FAILED</strong> (local copy is fine; see Events for the error).
+  {% endif %}
+</div>
+{% endif %}
+{% if request.query_params.get('restored') %}
+<div class="success">
+  restore complete. A pre-restore safety snapshot of the previous state was
+  saved locally (prefix <code>pre-restore_</code>) — restoring it undoes this restore.
+</div>
+{% endif %}
+{% if request.query_params.get('deleted') %}
+<div class="success">deleted {{ request.query_params.get('deleted') }} backup file(s).</div>
+{% endif %}
+{% set _err = error_message(request.query_params.get('error')) %}
+{% if _err %}
+<div class="error">{{ _err }}</div>
+{% endif %}
+
+<div class="card">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:1em;flex-wrap:wrap;">
+    <h2 style="margin:0;">Backups</h2>
+    <form method="post" action="/admin/backups/create" style="margin:0;">
+      {{ csrf_input(request) }}
+      <button type="submit" class="btn">Back Up Now</button>
+    </form>
+  </div>
+  <p class="muted" style="margin:.5em 0 0;">
+    Logical dump of the entire server state — products (incl. signing keys), customers,
+    licenses, feature presets, installs, events, webhook queue, MFA. Engine-agnostic
+    (SQLite ⇄ Postgres both ways).
+    {% if encryption_on %}
+    Archives are <strong>encrypted</strong> under a key derived from
+    <code>LICENSE_KEY_ENCRYPTION_KEY</code> — restoring needs the same KEK.
+    {% else %}
+    <strong style="color:var(--danger);">Archives are NOT encrypted</strong>
+    (no <code>LICENSE_KEY_ENCRYPTION_KEY</code> set) — they contain everything needed
+    to mint licenses. Handle accordingly.
+    {% endif %}
+  </p>
+  <p class="muted" style="margin:.5em 0 0;font-size:.9em;">
+    Local dir: <code>{{ backup_dir }}</code>
+    · S3: {% if s3_enabled %}<code>{{ s3_bucket }}</code>{% else %}<span>not configured (set <code>BACKUP_S3_BUCKET</code>)</span>{% endif %}
+    · Retention: keep {{ retention_count if retention_count > 0 else 'all' }}{% if retention_days > 0 %}, max {{ retention_days }}d{% endif %}
+    (scheduled via <code>python -m app.scripts.run_backup</code>; pre-restore snapshots never auto-pruned)
+  </p>
+
+  {% if backups %}
+  <form class="bulk-form" data-name="backup_names" method="post"
+        action="/admin/backups/delete"
+        data-confirm1-title="Delete {n} backup file(s)?"
+        data-confirm1-body="Removes the selected archive file(s) from the local backup directory. S3 copies (if any) are not touched."
+        data-confirm2-title="Final confirmation"
+        data-confirm2-body="Deleted archives are not recoverable from this server. Continue?"
+        data-confirm2-label="Delete {n} file(s)">
+    {{ csrf_input(request) }}
+    <p style="margin:.5em 0;">
+      <button data-bulk-btn type="submit" class="btn danger" style="display:none">
+        Delete <span data-bulk-count>0</span> Selected
+      </button>
+    </p>
+    <table data-sortable>
+      <thead><tr>
+        <th style="width:1%;"><input type="checkbox" data-select-all title="Select All"></th>
+        <th data-sort-key="name">Archive</th>
+        <th data-sort-key="size" data-sort-type="number">Size</th>
+        <th data-sort-key="created" data-sort-type="date">Created (UTC)</th>
+        <th>Encrypted</th>
+        <th style="width:1%;white-space:nowrap;"></th>
+      </tr></thead>
+      <tbody>
+      {% for b in backups %}
+        <tr>
+          <td><input type="checkbox" name="backup_names" value="{{ b.name }}"></td>
+          <td>
+            <code>{{ b.name }}</code>
+            {% if b.pre_restore %}<span class="badge disabled" title="Safety snapshot taken automatically before a restore. Never auto-pruned.">pre-restore</span>{% endif %}
+          </td>
+          <td>{{ '%.1f'|format(b.size / 1024) }} KB</td>
+          <td class="muted">{{ b.mtime.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td>{{ 'yes' if b.encrypted else 'NO' }}</td>
+          <td style="white-space:nowrap;">
+            <a class="btn muted" style="font-size:.8em;padding:.25em .7em;"
+               href="/admin/backups/download/{{ b.name }}">Download</a>
+            <button type="button" class="btn muted" style="font-size:.8em;padding:.25em .7em;"
+                    data-restore-name="{{ b.name }}">Restore…</button>
+            <button type="submit" class="btn-icon"
+                    formaction="/admin/backups/{{ b.name }}/delete"
+                    formnovalidate
+                    title="Delete this backup file"
+                    aria-label="Delete this backup file"
+                    data-confirm-title="Delete this backup file?"
+                    data-confirm-body="Removes {{ b.name }} from the local backup directory. Not recoverable from this server."
+                    data-confirm-label="Delete">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M6.5 1h3a.5.5 0 0 1 .5.5v1H6v-1a.5.5 0 0 1 .5-.5zM11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3A1.5 1.5 0 0 0 5 1.5v1H1.5a.5.5 0 0 0 0 1h.538l.853 10.66A2 2 0 0 0 4.885 16h6.23a2 2 0 0 0 1.994-1.84l.853-10.66h.538a.5.5 0 0 0 0-1H11zM4.5 5.5a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 0a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3.5.5a.5.5 0 0 0-1 0v8a.5.5 0 0 0 1 0V6z"/>
+              </svg>
+            </button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </form>
+  {% else %}
+  <p class="muted">no local backups yet — click Back Up Now or schedule
+  <code>python -m app.scripts.run_backup</code>.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Restore from uploaded file</h3>
+  <p class="muted" style="font-size:.9em;">
+    Full replace: every table is wiped and reloaded from the archive. A pre-restore
+    safety snapshot of the current state is saved locally first. The archive's schema
+    revision must match this server's.
+  </p>
+  <form method="post" action="/admin/backups/restore-upload" enctype="multipart/form-data" id="upload-restore-form">
+    {{ csrf_input(request) }}
+    <label>Backup file (<code>.lsbak</code> / <code>.tar.gz</code>)</label>
+    <input type="file" name="file" required>
+    <label>Type <code>{{ restore_phrase }}</code> to confirm</label>
+    <input type="text" name="confirmation_phrase" required autocomplete="off"
+           placeholder="{{ restore_phrase }}">
+    <p style="margin:.8em 0 0;">
+      <button type="submit" class="btn danger">Restore (replaces ALL data)</button>
+    </p>
+  </form>
+</div>
+
+{# Per-row restore modal: typed-phrase gate, same contract as upload. #}
+<div id="restore-modal" class="modal-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="rm-title">
+  <div class="modal-card" style="max-width:480px;">
+    <h3 id="rm-title">Restore backup</h3>
+    <p>Replace <strong>ALL</strong> current data with <code id="rm-name"></code>?
+       A pre-restore safety snapshot of the current state is saved locally first.</p>
+    <form id="rm-form" method="post" action="">
+      {{ csrf_input(request) }}
+      <label>Type <code>{{ restore_phrase }}</code> to confirm</label>
+      <input type="text" name="confirmation_phrase" id="rm-phrase" required autocomplete="off"
+             placeholder="{{ restore_phrase }}">
+      <div class="modal-actions">
+        <button type="button" class="btn muted" id="rm-cancel">Cancel</button>
+        <button type="submit" class="btn danger">Restore</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  var ov = document.getElementById('restore-modal');
+  var form = document.getElementById('rm-form');
+  var nameEl = document.getElementById('rm-name');
+  var phraseIn = document.getElementById('rm-phrase');
+  function close() {
+    ov.style.display = 'none';
+    document.removeEventListener('keydown', onKey);
+  }
+  function onKey(e) { if (e.key === 'Escape') close(); }
+  document.querySelectorAll('[data-restore-name]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var name = btn.dataset.restoreName;
+      nameEl.textContent = name;
+      form.action = '/admin/backups/' + encodeURIComponent(name) + '/restore';
+      phraseIn.value = '';
+      ov.style.display = '';
+      document.addEventListener('keydown', onKey);
+      setTimeout(function () { phraseIn.focus(); }, 50);
+    });
+  });
+  document.getElementById('rm-cancel').addEventListener('click', close);
+  ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+})();
+</script>
+{% endblock %}

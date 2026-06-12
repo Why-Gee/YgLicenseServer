@@ -45,6 +45,24 @@ class Settings(BaseModel):
     # brute-force keys. Unset means hash_key() raises — there is no plaintext
     # fallback for license lookup in v1.0+.
     license_key_pepper: str = ""
+    # --- backups (app.backup / app.backup_s3) -----------------------------
+    # Local destination for backup archives. The VM mounts /data, so the
+    # default keeps archives on the persistent volume next to the DB.
+    backup_dir: str = "./backups"
+    # S3-compatible destination; setting the bucket enables it. Endpoint
+    # empty = AWS S3; set it for R2/MinIO/GCS-interop. Credentials may also
+    # come from the ambient boto3 chain when the key pair is unset.
+    backup_s3_bucket: str = ""
+    backup_s3_endpoint: str = ""
+    backup_s3_region: str = ""
+    backup_s3_access_key: str = ""
+    backup_s3_secret_key: str = ""
+    backup_s3_prefix: str = "yg-license-server"
+    # Retention for SCHEDULED/manual archives (pre-restore safety snapshots
+    # are never auto-pruned). keep N newest; 0 = unlimited. Age cap in days;
+    # 0 = unlimited. Whichever prunes more wins.
+    backup_retention_count: int = 14
+    backup_retention_days: int = 0
 
 
 @lru_cache(maxsize=1)
@@ -64,4 +82,13 @@ def get_settings() -> Settings:
         db_max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "10")),
         db_pool_recycle=int(os.environ.get("DB_POOL_RECYCLE", "1800")),
         license_key_pepper=os.environ.get("LICENSE_KEY_PEPPER", ""),
+        backup_dir=os.environ.get("BACKUP_DIR", "./backups"),
+        backup_s3_bucket=os.environ.get("BACKUP_S3_BUCKET", ""),
+        backup_s3_endpoint=os.environ.get("BACKUP_S3_ENDPOINT", ""),
+        backup_s3_region=os.environ.get("BACKUP_S3_REGION", ""),
+        backup_s3_access_key=os.environ.get("BACKUP_S3_ACCESS_KEY", ""),
+        backup_s3_secret_key=os.environ.get("BACKUP_S3_SECRET_KEY", ""),
+        backup_s3_prefix=os.environ.get("BACKUP_S3_PREFIX", "yg-license-server"),
+        backup_retention_count=int(os.environ.get("BACKUP_RETENTION_COUNT", "14")),
+        backup_retention_days=int(os.environ.get("BACKUP_RETENTION_DAYS", "0")),
     )
