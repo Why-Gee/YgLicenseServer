@@ -267,6 +267,27 @@
         <label>Features (JSON)</label>
         <input id="lm-features" name="features_json" placeholder='{"premium": true, "trial": false}'>
       </div>
+      {# First-class AI keys. These controls are authoritative for
+         features.ai_api_included / features.ai_included_usd_cap -- the
+         server merges them over the JSON above, and the edit prefill strips
+         them from the JSON field so they're only authored here. #}
+      <div style="grid-column:1/-1;">
+        <label style="display:inline-flex;align-items:center;gap:.4em;font-weight:normal;">
+          <input id="lm-ai-included" name="ai_api_included" type="checkbox" value="1"
+                 style="width:auto;margin:0;">
+          AI included (platform key)
+        </label>
+        <div style="display:flex;gap:.6em;align-items:center;margin-top:.3em;">
+          <label for="lm-ai-cap" style="margin:0;font-weight:normal;">Monthly USD cap</label>
+          <input id="lm-ai-cap" name="ai_included_usd_cap" type="number" min="0.01" step="any"
+                 placeholder="no cap" disabled style="max-width:10em;">
+        </div>
+        <small class="muted" style="display:block;margin-top:.2em;">
+          Written into the license JWT as <code>features.ai_api_included</code> +
+          <code>features.ai_included_usd_cap</code>. Un-ticking saves an explicit
+          <code>false</code> (audit-friendly) and clears the cap. Empty cap = no cap.
+        </small>
+      </div>
       <div style="grid-column:1/-1;border-top:1px solid var(--bd);padding-top:.7em;margin-top:.3em;">
         <label style="margin-top:0;font-weight:600;color:var(--fg);">Webhook (Optional)
           {# Source badge: admin-set URLs lock /v1/check overrides and
@@ -369,6 +390,8 @@
   var validUntilWrap = document.getElementById('lm-valid-until-wrap');
   var validUntilIn = document.getElementById('lm-valid-until');
   var featIn = document.getElementById('lm-features');
+  var aiCb = document.getElementById('lm-ai-included');
+  var aiCapIn = document.getElementById('lm-ai-cap');
   var whIn = document.getElementById('lm-webhook-url');
   var sourceBadge = document.getElementById('lm-webhook-source');
   var sourceHint = document.getElementById('lm-webhook-source-hint');
@@ -419,6 +442,11 @@
       convertSelfBtn.style.display = 'none';
     }
   }
+
+  // Cap input only posts while the AI toggle is on -- a disabled input is
+  // omitted from the form payload, which the server reads as "no cap".
+  function syncAiCap() { aiCapIn.disabled = !aiCb.checked; }
+  aiCb.addEventListener('change', syncAiCap);
 
   // Save button = save + close. Apply = save + keep open. The auto-open
   // logic below honors a one-shot sessionStorage flag set by Save so the
@@ -521,6 +549,8 @@
         valid_days: validDaysIn.value,
         valid_until: validUntilIn.value,
         features_json: featIn.value,
+        ai_api_included: aiCb.checked,
+        ai_included_usd_cap: aiCapIn.value,
         webhook_url: whIn.value,
         allow_http_webhook: allowHttpCb.checked,
         rotate_secret: rotateCb.checked,
@@ -589,7 +619,17 @@
       validUntilIn.setAttribute('name', 'valid_until');
       validUntilIn.setAttribute('required', '');
       validUntilIn.value = lic.valid_until;
-      featIn.value = lic.features_json;
+      // Split the stored features: the two AI keys feed the dedicated
+      // controls and are stripped from the JSON field. On save the server
+      // re-merges the controls over the JSON, so the round-trip is exact.
+      var feats = {};
+      try { feats = JSON.parse(lic.features_json) || {}; } catch (e) { feats = {}; }
+      aiCb.checked = feats.ai_api_included === true;
+      aiCapIn.value = (typeof feats.ai_included_usd_cap === 'number') ? feats.ai_included_usd_cap : '';
+      delete feats.ai_api_included;
+      delete feats.ai_included_usd_cap;
+      featIn.value = JSON.stringify(feats);
+      syncAiCap();
       whIn.value = lic.webhook_url || '';
       renderSourceBadge(lic.webhook_url_source, !!lic.webhook_url, lic.id);
       allowHttpRow.style.display = '';
@@ -643,6 +683,9 @@
       validUntilIn.removeAttribute('name');
       validUntilIn.removeAttribute('required');
       featIn.value = '';
+      aiCb.checked = false;
+      aiCapIn.value = '';
+      syncAiCap();
       whIn.value = '';
       renderSourceBadge(null, false, null);
       allowHttpRow.style.display = '';
