@@ -303,6 +303,10 @@ def admin_list_licenses(
                 "created_at": r.created_at.isoformat(),
                 "webhook_url": r.webhook_url,
                 "webhook_url_source": r.webhook_url_source,
+                # Presence flag only — the raw signing secret is never exposed
+                # over the list API. Lets a monitor spot a dead push-channel
+                # (URL set, secret NULL → deliveries are suppressed).
+                "has_webhook_secret": bool(r.webhook_secret),
                 "allow_http_webhook": bool(r.allow_http_webhook),
             }
             for r in page.items

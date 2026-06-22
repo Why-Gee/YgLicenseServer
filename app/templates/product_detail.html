@@ -117,8 +117,13 @@
           <td>{{ lic.plan }}</td>
           <td><span class="badge {{ lic.status }}">{{ lic.status }}</span></td>
           <td class="muted">{{ lic.valid_until.strftime('%Y-%m-%d') }}</td>
-          <td class="muted" style="font-size:.85em;" data-sort-value="{{ '1' if lic.webhook_url else '0' }}">
-            {% if lic.webhook_url %}<span class="badge active">On</span>{% else %}<span class="muted">—</span>{% endif %}
+          {# Three states, sorted by health (0 none / 1 dead / 2 live):
+             a URL with no signing secret is a DEAD push-channel — deliver_*
+             short-circuits on the missing secret — so it must NOT read "On". #}
+          <td class="muted" style="font-size:.85em;" data-sort-value="{{ '2' if (lic.webhook_url and lic.webhook_secret) else ('1' if lic.webhook_url else '0') }}">
+            {% if not lic.webhook_url %}<span class="muted">—</span>
+            {% elif lic.webhook_secret %}<span class="badge active">On</span>
+            {% else %}<span class="badge revoked" title="Webhook URL set but no signing secret on file — deliveries are suppressed. Open the license and click Update to mint a secret and activate the channel.">No secret</span>{% endif %}
           </td>
           <td style="white-space:nowrap;">
             {# Toggle: ON = status active. Click flips to /disable or /enable.
