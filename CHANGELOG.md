@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.4.0 — admin visibility for dead webhook push-channels
+
+A license with a `webhook_url` set but no `webhook_secret` has a silently-dead
+push channel: `webhooks.deliver_*` short-circuits on the missing secret, yet the
+admin list rendered a green "On" — no hint that nothing was being delivered.
+
+- **Admin product-detail list** — the Webhook column is now three-state, sorted
+  by health: `—` (no URL) / `On` (URL + secret, live) / **`No secret`** warning
+  (URL set, secret NULL — deliveries suppressed), with a tooltip pointing to the
+  fix (rotate the secret or Convert to self).
+- **JSON API** — `GET /v1/admin/products/{slug}/licenses` items now carry a
+  `has_webhook_secret` boolean so a monitor can detect dead channels
+  programmatically. The raw signing secret is never exposed over the list API.
+
+No schema change. (Follow-up to v1.3.1's `/v1/check` secret auto-heal: that fix
+prevents NEW dead self-source channels; this makes any pre-existing dead channel
+— including admin-source ones the auto-heal deliberately skips — visible.)
+
 ## v1.3.0 — in-app backup/restore (local + S3, manual + scheduled)
 
 Operator-facing backup layer (the raw VM→GCS snapshot from v0.11 stays as
