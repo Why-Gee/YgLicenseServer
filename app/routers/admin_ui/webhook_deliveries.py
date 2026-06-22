@@ -84,6 +84,15 @@ def retry_delivery(
         return RedirectResponse(
             "/admin/webhook-deliveries?error=not_found", status_code=303,
         )
+    # `license.test` rows are one-shot synthetic probes persisted as terminal
+    # records (see services.licenses.test_webhook). They must NEVER re-enter the
+    # durable retry queue — flipping one back to 'pending' would enrol it in the
+    # retry_webhooks worker's schedule. The UI hides Retry for them; this guards
+    # a hand-crafted POST. Re-test via the license's "Test webhook" button.
+    if d.event_type == "license.test":
+        return RedirectResponse(
+            "/admin/webhook-deliveries?error=not_retryable", status_code=303,
+        )
     # Allow re-running abandoned deliveries: flip back to pending with a
     # fresh attempt counter so the backoff schedule has room.
     if d.status == "abandoned":

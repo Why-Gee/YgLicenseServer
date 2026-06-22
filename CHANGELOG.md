@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.4.7 — webhook delivery response observability (see what the receiver returned)
+
+After configuring a webhook there was no way to tell from LS whether the receiver
+is correctly set up with the matching signing secret — a delivery returned `200`
+whether the HMAC verified or not, and the receiver's HTTP status wasn't even
+recorded (`deliver()` returned it; `try_deliver()` threw it away). This adds the
+industry-standard answer (Stripe/GitHub/Svix all ship a per-delivery log of what
+the endpoint returned): record and surface the response.
+
+- **`webhook_deliveries` records the receiver response** — two additive nullable
+  columns, `response_status` (HTTP code on the last attempt; NULL = never reached
+  the receiver — DNS/TLS/timeout/SSRF-refusal) and `response_excerpt` (response
+  body, success or failure). `try_deliver()` now persists both on every attempt.
+- **Test webhooks appear in the delivery log** — the "Test webhook" button now
+  writes one terminal `WebhookDelivery` row (`license.test`, status
+  `delivered`/`abandoned`, never queued for retry) so the test and its response
+  are auditable alongside real deliveries.
+- **Delivery-history page** gains a colour-coded **Response** column (2xx green /
+  4xx amber / 5xx red / em-dash = never reached), with the response body excerpt
+  in the cell tooltip — so a `401 bad signature` (the signal that the receiver's
+  secret is wrong) is visible at a glance. The body is HTML-escaped; the signing
+  secret is never rendered.
+
+Additive Alembic migration (`a1f7c9e23b50`, auto-applied on boot). No API change.
+The secret signature `test_webhook(lic)` becomes `test_webhook(lic, db)` (internal).
+
 ## v1.4.6 — un-ticking "Allow plain http" now actually revokes it
 
 Pre-existing low-severity bug (found in the v1.4.4/v1.4.5 adversarial review; not

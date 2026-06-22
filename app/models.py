@@ -328,6 +328,13 @@ class WebhookDelivery(Base):
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Receiver observability (v1.4.7): what the endpoint actually returned on
+    # the LAST attempt. response_status is the HTTP code (NULL = never reached
+    # the receiver — DNS/TLS/timeout/SSRF-refusal); response_excerpt is the
+    # response body (success OR failure), so a 401 "bad signature" is visible
+    # to the operator. Never holds the signing secret.
+    response_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_excerpt: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive, index=True)
 
 

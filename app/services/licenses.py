@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app import webhooks as wh
 from app._time import utcnow as _utcnow
 from app.license_keys import hash_key, make_display
-from app.models import Customer, Event, Install, License, Product
+from app.models import Customer, Event, Install, License, Product, WebhookDelivery
 from app.security import is_safe_url_shape
 from app.services.errors import Unsafe, ValidationFailed
 
@@ -440,22 +440,43 @@ class WebhookTestResult:
     error: str | None
 
 
-def test_webhook(lic: License) -> WebhookTestResult:
-    """Send a synthetic license.test event. Returns delivery result without
-    mutating the license. Caller checks lic.webhook_url/_secret are set."""
+def test_webhook(lic: License, db: Session) -> WebhookTestResult:
+    """Send a synthetic license.test event and record it in the delivery log.
+
+    Does not mutate the license. Persists ONE terminal WebhookDelivery row
+    (Stripe/GitHub-style: test sends appear in history with their response) —
+    deliberately NOT routed through enqueue()/try_deliver(), which would dump
+    the test into the durable retry queue (7 backoff attempts, lingering
+    'pending'). Status is terminal ('delivered'/'abandoned') so the retry
+    worker never re-picks it. Returns the result for the redirect banner."""
     if not lic.webhook_url or not lic.webhook_secret:
         raise ValidationFailed("no webhook configured")
+    data = {
+        "license_id": lic.id, "key": lic.key,
+        "product_slug": lic.product.slug,
+        "customer_email": lic.customer.email,
+        "test": True,
+    }
     ok, status, err = wh.deliver(
         url=lic.webhook_url, secret=lic.webhook_secret,
-        event_type="license.test",
-        data={
-            "license_id": lic.id, "key": lic.key,
-            "product_slug": lic.product.slug,
-            "customer_email": lic.customer.email,
-            "test": True,
-        },
+        event_type="license.test", data=data,
         allow_http=bool(lic.allow_http_webhook),
     )
+    now = _utcnow()
+    db.add(WebhookDelivery(
+        license_id=lic.id, product_id=lic.product_id,
+        url=lic.webhook_url, secret=lic.webhook_secret,
+        event_type="license.test",
+        payload_json=json.dumps(data, separators=(",", ":")),
+        attempts=1,
+        status="delivered" if ok else "abandoned",
+        next_attempt_at=now, last_attempt_at=now,
+        delivered_at=now if ok else None,
+        last_error=None if ok else (err or "(no detail)")[:500],
+        response_status=status,
+        response_excerpt=((err or "")[:500] or None) if status is not None else None,
+    ))
+    db.commit()
     return WebhookTestResult(ok=ok, status=status, error=err)
 
 

@@ -55,6 +55,15 @@ def test_alembic_upgrade_head_creates_all_tables(upgraded_db_url: str) -> None:
     assert expected.issubset(tables), f"missing: {expected - tables}"
 
 
+def test_webhook_deliveries_has_response_columns_after_upgrade(upgraded_db_url: str) -> None:
+    """v1.4.7 migration adds response_status + response_excerpt to
+    webhook_deliveries so `alembic upgrade head` (run on every prod boot)
+    matches the model."""
+    engine = create_engine(upgraded_db_url)
+    cols = {c["name"] for c in inspect(engine).get_columns("webhook_deliveries")}
+    assert {"response_status", "response_excerpt"}.issubset(cols), f"have: {sorted(cols)}"
+
+
 def test_customer_email_unique_after_upgrade(upgraded_db_url: str) -> None:
     """Two customers with the same email must collide on the unique idx."""
     from sqlalchemy.exc import IntegrityError

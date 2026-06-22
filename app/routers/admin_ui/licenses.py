@@ -265,7 +265,7 @@ def license_webhook_test(
     if lic is None:
         raise HTTPException(status_code=404)
     try:
-        result = licenses_svc.test_webhook(lic)
+        result = licenses_svc.test_webhook(lic, db)
     except ValidationFailed as e:
         return RedirectResponse(
             f"/admin/products/{lic.product.slug}?error={err_code(e)}",

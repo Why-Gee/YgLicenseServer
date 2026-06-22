@@ -13,10 +13,14 @@ from fastapi.testclient import TestClient
 
 
 @contextmanager
-def _captured(monkeypatch, status: int = 200):
+def _captured(monkeypatch, status: int = 200, body: bytes = b'{"ok":true}'):
     """Capture outbound posts via httpx.MockTransport. The captured list
     keeps the pre-httpx contract: each entry is {url, headers, body} where
-    headers are lowercased (HTTP/2 norm) and body is the JSON string."""
+    headers are lowercased (HTTP/2 norm) and body is the JSON string.
+
+    `body` sets the mocked receiver's response body (default a 2xx-ish JSON);
+    pass e.g. b'bad signature' alongside status=401 to exercise the response-
+    excerpt capture."""
     sent: list[dict] = []
 
     def _handler(req: httpx.Request) -> httpx.Response:
@@ -25,7 +29,7 @@ def _captured(monkeypatch, status: int = 200):
             "headers": dict(req.headers),
             "body": req.content.decode() if req.content else "",
         })
-        return httpx.Response(status, content=b'{"ok":true}')
+        return httpx.Response(status, content=body)
 
     test_client = httpx.Client(
         transport=httpx.MockTransport(_handler), follow_redirects=False,
@@ -625,3 +629,240 @@ def test_edited_banner_renders_inside_modal(client: TestClient) -> None:
     )
     assert r.status_code == 200
     _assert_in_modal(r.content, b"license updated")
+
+
+# ---------- response observability (v1.4.7) -------------------------------
+# try_deliver() must persist what the receiver returned (status + body
+# excerpt) on every attempt, and test_webhook() must log a terminal row.
+
+
+def _enqueue(lid: str, *, url: str | None = None, event_type: str = "license.updated"):
+    """Enqueue a pending delivery for a license and return its id. `url`
+    overrides the license's webhook_url (e.g. a refused URL)."""
+    import app.webhooks as wh
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        d = wh.enqueue(
+            s, url=(url or lic.webhook_url), secret=(lic.webhook_secret or "whsec_x"),
+            event_type=event_type, data={"k": "v"},
+            license_id=(lic.id if url is None else None),
+        )
+        s.commit()
+        return d.id
+
+
+def _delivery_fields(did: str) -> dict:
+    from app.db import SessionLocal
+    from app.models import WebhookDelivery
+    with SessionLocal() as s:
+        d = s.query(WebhookDelivery).filter_by(id=did).one()
+        return {
+            "status": d.status, "attempts": d.attempts,
+            "response_status": d.response_status,
+            "response_excerpt": d.response_excerpt, "last_error": d.last_error,
+        }
+
+
+def test_try_deliver_persists_response_status_on_success(client: TestClient, monkeypatch) -> None:
+    import app.webhooks as wh
+    from app.db import SessionLocal
+    _create_product(client)
+    lid = _issue_via_ui(client, webhook_url="https://example.test/wh")
+    did = _enqueue(lid)
+    with _captured(monkeypatch, status=200):
+        with SessionLocal() as s:
+            wh.try_deliver(s, did)
+            s.commit()
+    row = _delivery_fields(did)
+    assert row["status"] == "delivered"
+    assert row["response_status"] == 200
+
+
+def test_try_deliver_persists_status_and_excerpt_on_non_2xx(client: TestClient, monkeypatch) -> None:
+    import app.webhooks as wh
+    from app.db import SessionLocal
+    _create_product(client)
+    lid = _issue_via_ui(client, webhook_url="https://example.test/wh")
+    did = _enqueue(lid)
+    with _captured(monkeypatch, status=401, body=b"bad signature"):
+        with SessionLocal() as s:
+            wh.try_deliver(s, did)
+            s.commit()
+    row = _delivery_fields(did)
+    assert row["response_status"] == 401
+    assert "bad signature" in (row["response_excerpt"] or "")
+    assert row["last_error"]  # network/body detail preserved
+    assert row["status"] == "pending"  # one failed attempt -> still retrying
+
+
+def test_try_deliver_response_status_null_on_refusal(client: TestClient, monkeypatch) -> None:
+    """A delivery we never get to send (here: SSRF-refused private-IP URL)
+    records response_status NULL and a refused:* last_error — distinct from a
+    receiver that answered with an HTTP status."""
+    import app.webhooks as wh
+    from app.db import SessionLocal
+    _create_product(client)
+    lid = _issue_via_ui(client, webhook_url="https://example.test/wh")
+    did = _enqueue(lid, url="https://10.0.0.1/wh")  # private IP -> refused pre-HTTP
+    with SessionLocal() as s:
+        wh.try_deliver(s, did)
+        s.commit()
+    row = _delivery_fields(did)
+    assert row["response_status"] is None
+    assert (row["last_error"] or "").startswith("refused:")
+
+
+def _live_license(lid: str):
+    """Return a session + attached License for direct service calls. Caller
+    closes the session."""
+    from app.db import SessionLocal
+    from app.models import License
+    s = SessionLocal()
+    return s, s.query(License).filter_by(id=lid).one()
+
+
+def test_test_webhook_persists_terminal_delivery_row(client: TestClient, monkeypatch) -> None:
+    from app.db import SessionLocal
+    from app.models import WebhookDelivery
+    from app.services import licenses as svc
+    _create_product(client)
+    lid = _issue_via_ui(client, webhook_url="https://example.test/wh")
+    with _captured(monkeypatch, status=200):
+        s, lic = _live_license(lid)
+        try:
+            result = svc.test_webhook(lic, s)
+        finally:
+            s.close()
+    assert result.ok is True and result.status == 200
+    with SessionLocal() as s:
+        rows = s.query(WebhookDelivery).filter_by(event_type="license.test").all()
+        assert len(rows) == 1
+        d = rows[0]
+        assert d.status == "delivered"
+        assert d.attempts == 1
+        assert d.response_status == 200
+        assert d.license_id == lid
+
+
+def test_test_webhook_failure_row_is_abandoned_not_pending(client: TestClient, monkeypatch) -> None:
+    from app._time import utcnow
+    from app.db import SessionLocal
+    from app.models import WebhookDelivery
+    from app.services import licenses as svc
+    _create_product(client)
+    lid = _issue_via_ui(client, webhook_url="https://example.test/wh")
+    with _captured(monkeypatch, status=500, body=b"boom"):
+        s, lic = _live_license(lid)
+        try:
+            svc.test_webhook(lic, s)
+        finally:
+            s.close()
+    with SessionLocal() as s:
+        d = s.query(WebhookDelivery).filter_by(event_type="license.test").one()
+        assert d.status == "abandoned"  # terminal, not queued
+        assert d.response_status == 500
+        # The retry worker's query must never pick a test row up.
+        pending = (
+            s.query(WebhookDelivery)
+            .filter(WebhookDelivery.status == "pending", WebhookDelivery.next_attempt_at <= utcnow())
+            .all()
+        )
+        assert d.id not in {p.id for p in pending}
+
+
+def test_test_webhook_validationfailed_writes_no_row(client: TestClient, monkeypatch) -> None:
+    from app.db import SessionLocal
+    from app.models import WebhookDelivery
+    from app.services import licenses as svc
+    from app.services.errors import ValidationFailed
+    _create_product(client)
+    lid = _issue_via_ui(client)  # no webhook configured
+    s, lic = _live_license(lid)
+    try:
+        with pytest.raises(ValidationFailed):
+            svc.test_webhook(lic, s)
+    finally:
+        s.close()
+    with SessionLocal() as s:
+        assert s.query(WebhookDelivery).count() == 0
+
+
+# ---------- deliveries page: Response column ------------------------------
+
+
+def _insert_delivery(**fields) -> None:
+    from app._time import utcnow
+    from app.db import SessionLocal
+    from app.models import WebhookDelivery
+    base = dict(
+        url="https://example.test/wh", secret="whsec_x",
+        event_type="license.updated", payload_json="{}",
+        attempts=1, status="delivered", next_attempt_at=utcnow(),
+        last_attempt_at=utcnow(), delivered_at=utcnow(),
+    )
+    base.update(fields)
+    with SessionLocal() as s:
+        s.add(WebhookDelivery(**base))
+        s.commit()
+
+
+def test_deliveries_page_renders_response_column(client: TestClient) -> None:
+    cookies = _admin_login(client)
+    _insert_delivery(response_status=200)
+    _insert_delivery(status="pending", delivered_at=None, response_status=401,
+                     response_excerpt="bad signature", last_error="bad signature")
+    _insert_delivery(status="pending", delivered_at=None, response_status=None,
+                     last_error="refused:unsafe_url")
+    r = client.get("/admin/webhook-deliveries", cookies=cookies)
+    assert r.status_code == 200
+    body = r.text
+    assert "Response" in body  # column header
+    assert ">200<" in body
+    assert ">401<" in body
+    assert "bad signature" in body  # excerpt surfaced (in the title attr)
+
+
+def test_response_excerpt_is_html_escaped(client: TestClient) -> None:
+    """A receiver body is attacker-influenced; it must be HTML-escaped in the
+    page, never rendered as live markup."""
+    cookies = _admin_login(client)
+    _insert_delivery(status="pending", delivered_at=None, response_status=400,
+                     response_excerpt="<script>alert(1)</script>")
+    r = client.get("/admin/webhook-deliveries", cookies=cookies)
+    assert "<script>alert(1)</script>" not in r.text
+    assert "&lt;script&gt;" in r.text
+
+
+def test_retry_noops_on_license_test_row(client: TestClient) -> None:
+    """A license.test row is a terminal one-shot — the Retry route must refuse
+    it so a hand-crafted POST can't re-enqueue a test into the durable retry
+    worker (the whole reason test_webhook writes a terminal, non-queued row)."""
+    from app.db import SessionLocal
+    from app.models import WebhookDelivery
+    cookies = _admin_login(client)
+    _insert_delivery(event_type="license.test", status="abandoned",
+                     delivered_at=None, response_status=500, last_error="boom")
+    with SessionLocal() as s:
+        did = s.query(WebhookDelivery).one().id
+    r = _form_post(client, f"/admin/webhook-deliveries/{did}/retry", cookies, follow_redirects=False)
+    assert r.status_code == 303
+    assert "error=not_retryable" in r.headers["location"]
+    with SessionLocal() as s:
+        d = s.query(WebhookDelivery).filter_by(id=did).one()
+        assert d.status == "abandoned"  # NOT flipped back to pending
+        assert d.attempts == 1
+
+
+def test_test_rows_show_test_labels_and_no_retry_button(client: TestClient) -> None:
+    """Test rows read as 'test ok'/'test failed' (not the queue words
+    pending/abandoned), and a failed test never offers a Retry button."""
+    cookies = _admin_login(client)
+    _insert_delivery(event_type="license.test", status="delivered", response_status=200)
+    _insert_delivery(event_type="license.test", status="abandoned",
+                     delivered_at=None, response_status=401, response_excerpt="bad signature")
+    body = client.get("/admin/webhook-deliveries", cookies=cookies).text
+    assert "test ok" in body
+    assert "test failed" in body
+    assert "Retry now" not in body  # the only non-delivered row is a test row
