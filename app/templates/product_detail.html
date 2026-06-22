@@ -320,7 +320,7 @@
         {# Dead-channel warning: a URL with no signing secret means LS suppresses
            every delivery (webhooks.deliver_* short-circuits). Mirrors the list's
            "No secret" badge; JS toggles it in edit mode when url set + no secret. #}
-        <div id="lm-webhook-deadchannel" class="error" style="display:none;margin:.5em 0 0;padding:.5em .8em;font-size:.85em;">
+        <div id="lm-webhook-deadchannel" class="error" role="status" aria-live="polite" style="display:none;margin:.5em 0 0;padding:.5em .8em;font-size:.85em;">
           No signing secret on file — webhook deliveries are suppressed. Click <strong>Update</strong> above to mint a secret and activate the channel.
         </div>
       </div>
