@@ -291,6 +291,78 @@ def test_edit_changing_url_sets_admin_source(client: TestClient) -> None:
         assert lic.webhook_url_source == "admin", "admin set a new URL via the edit form"
 
 
+def test_edit_rotate_secret_preserves_self_source(client: TestClient) -> None:
+    """Regression (v1.4.5): ticking 'Rotate signing secret on save' on a
+    self-registered webhook must rotate the secret WITHOUT flipping source back
+    to admin -- a flip would stop /v1/check echoing the freshly-rotated secret,
+    so the client keeps verifying with the old one and every delivery fails."""
+    cookies = _login(client)
+    _create_product(client)
+    lid, _ = _issue_admin_set(client, cookies, "https://customer.example.com/wh")
+    client.post(
+        f"/admin/licenses/{lid}/webhook/convert-to-self",
+        data={"csrf_token": _csrf(cookies)}, cookies=cookies, follow_redirects=False,
+    )
+
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        assert lic.webhook_url_source == "self"
+        secret_before = lic.webhook_secret
+        url_before = lic.webhook_url
+
+    r = client.post(
+        f"/admin/licenses/{lid}/edit",
+        data={
+            "plan": "standard", "max_users": "10",
+            "valid_until": _valid_until_str(lid), "features_json": "{}",
+            "webhook_url": url_before, "rotate_secret": "1",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        assert lic.webhook_url_source == "self", "rotate must not relabel self->admin"
+        assert lic.webhook_secret and lic.webhook_secret != secret_before, "secret rotated"
+        assert lic.webhook_url == url_before
+
+
+def test_edit_rotate_secret_keeps_admin_source(client: TestClient) -> None:
+    """Guard: rotating on an admin-source row (URL unchanged) still rotates and
+    stays admin -- the source is preserved, not blindly forced either way."""
+    cookies = _login(client)
+    _create_product(client)
+    lid, _ = _issue_admin_set(client, cookies, "https://admin.example.com/wh")
+
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        assert lic.webhook_url_source == "admin"
+        secret_before = lic.webhook_secret
+
+    r = client.post(
+        f"/admin/licenses/{lid}/edit",
+        data={
+            "plan": "standard", "max_users": "10",
+            "valid_until": _valid_until_str(lid), "features_json": "{}",
+            "webhook_url": "https://admin.example.com/wh", "rotate_secret": "1",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        assert lic.webhook_url_source == "admin"
+        assert lic.webhook_secret != secret_before, "secret rotated"
+
+
 def test_modal_card_css_scrolls_when_tall(client: TestClient) -> None:
     """Bug: a tall license modal overflowed the viewport with no scroll, so the
     Save button was clipped/unclickable. The shared .modal-card must cap its

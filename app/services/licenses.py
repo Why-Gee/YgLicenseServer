@@ -303,9 +303,15 @@ def edit_license(
     # rotate; otherwise an unrelated edit leaves source/secret/URL untouched.
     url_changed = new_url != lic.webhook_url
     if url_changed or rotate_secret:
+        # Only relabel to admin-source when the admin actually CHANGED the URL
+        # (taking ownership of it). A pure rotate (URL unchanged, just minting a
+        # fresh secret) must preserve the existing source -- otherwise ticking
+        # "Rotate signing secret on save" on a self-registered webhook would flip
+        # it to admin and stop /v1/check echoing the new secret to the client.
         apply_webhook_config(
             lic, url=new_url, rotate=rotate_secret, mint_on_url_change=True,
-            source="admin", allow_http=allow_http_webhook,
+            source=("admin" if url_changed else lic.webhook_url_source),
+            allow_http=allow_http_webhook,
         )
     else:
         # URL unchanged + no rotate: keep URL/secret/source as-is (a plain edit

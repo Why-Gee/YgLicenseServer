@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.4.5 — rotating a secret no longer re-locks a self-registered webhook
+
+Follow-up to v1.4.4 (caught in adversarial review). The v1.4.4 fix still passed
+`source="admin"` whenever it touched the webhook config, so ticking **"Rotate
+signing secret on save"** on a `self`-source license (URL unchanged) flipped it
+to `admin` — the same data-integrity failure, just via the rotate path instead of
+a plain save. After the flip `/v1/check` stops echoing the new secret, so the
+client keeps verifying with the old one and every signed delivery fails.
+
+`edit_license` now relabels to `admin` **only when the admin actually changed the
+URL** (taking ownership); a pure rotate preserves the existing source while still
+minting a fresh secret. Pinned by tests for rotate-on-self (stays `self`) and
+rotate-on-admin (stays `admin`).
+
+No schema change.
+
 ## v1.4.4 — license edit no longer re-locks a self-registered webhook; modal scrolls
 
 Two admin-UI bug fixes found while activating raanana's webhook.
