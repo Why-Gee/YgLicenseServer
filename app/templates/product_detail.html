@@ -182,9 +182,10 @@
    Server-side rendering keeps it the source of truth (incl. whether the
    secret should be revealed for ?webhook_lid / ?issued). #}
 <script type="application/json" id="licenses-data">
+{% set reveal_lid = (request.query_params.get('webhook_lid') or request.query_params.get('issued') or '') %}
 {
   "product_slug": "{{ product.slug }}",
-  "reveal_lid": {{ ((request.query_params.get('webhook_lid') or request.query_params.get('issued')) or '')|tojson }},
+  "reveal_lid": {{ reveal_lid|tojson }},
   "auto_open_lid": {{ ((request.query_params.get('webhook_lid') or request.query_params.get('issued') or request.query_params.get('edited') or request.query_params.get('webhook_test_lid')) or '')|tojson }},
   {# Plaintext key surfaces here for ONE render (the post-issue redirect carries
      ?key=). admin.js strips it from the URL on load, so a refresh wipes it. #}
@@ -203,7 +204,12 @@
       "status": {{ lic.status|tojson }},
       "webhook_url": {{ (lic.webhook_url or '')|tojson }},
       "webhook_url_source": {{ (lic.webhook_url_source or 'self')|tojson }},
-      "webhook_secret": {{ (lic.webhook_secret or '')|tojson }},
+      {# Presence flag for all rows; the raw secret is emitted ONLY for the one
+         just-set/rotated row the server flagged (reveal_lid), so the modal can
+         show it once. Every other row gets "" — the signing secret is never
+         broadcast into page source for the whole license list. #}
+      "has_webhook_secret": {{ (true if lic.webhook_secret else false)|tojson }},
+      "webhook_secret": {{ (lic.webhook_secret if (lic.webhook_secret and (lic.id|string) == reveal_lid) else '')|tojson }},
       "allow_http_webhook": {{ 1 if lic.allow_http_webhook else 0 }}
     }{% if not loop.last %},{% endif %}
     {% endfor %}
@@ -672,8 +678,9 @@
         secretEl.textContent = '';
       }
       // Dead-channel warning: URL set but no signing secret → deliveries are
-      // suppressed. Source-agnostic (admin + self both need a secret).
-      deadChannelEl.style.display = (lic.webhook_url && !lic.webhook_secret) ? '' : 'none';
+      // suppressed. Source-agnostic (admin + self both need a secret). Keys on
+      // has_webhook_secret — the raw value is no longer present for bulk rows.
+      deadChannelEl.style.display = (lic.webhook_url && !lic.has_webhook_secret) ? '' : 'none';
       // Update button: edit-mode only. Posts to the dedicated webhook
       // endpoint -- saves ONLY the webhook URL + regenerates the secret,
       // doesn't touch other field edits. Hint tells the user that.
