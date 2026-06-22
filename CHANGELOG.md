@@ -9,7 +9,7 @@ admin list rendered a green "On" — no hint that nothing was being delivered.
 - **Admin product-detail list** — the Webhook column is now three-state, sorted
   by health: `—` (no URL) / `On` (URL + secret, live) / **`No secret`** warning
   (URL set, secret NULL — deliveries suppressed), with a tooltip pointing to the
-  fix (rotate the secret or Convert to self).
+  fix (open the license and click Update to mint a secret).
 - **JSON API** — `GET /v1/admin/products/{slug}/licenses` items now carry a
   `has_webhook_secret` boolean so a monitor can detect dead channels
   programmatically. The raw signing secret is never exposed over the list API.
@@ -19,6 +19,25 @@ No schema change. Companion to the separate `/v1/check` secret auto-heal change
 any *pre-existing* dead channel — including admin-source ones the auto-heal
 deliberately skips — visible. The two are independent; if both land, merge the
 auto-heal first so the version sequence stays contiguous.
+
+## v1.3.1 — auto-heal missing webhook secrets on /v1/check
+
+Bug fix for dormant outbound webhooks. A `self`-source license that registered
+its `webhook_url` on an LS build predating secret-minting (or had its secret
+wiped) was permanently stuck with `webhook_secret = NULL`: the mint only ever
+fired on a URL *change*, so `webhooks.deliver_*` short-circuited and `/v1/check`
+returned no secret to the client. The instant push channel never came up.
+
+- **Auto-heal in `app/services/check.py`:** on any `/v1/check`, a `self`-source
+  license that carries a `webhook_url` but no secret now gets one minted —
+  even when the URL is unchanged. Idempotent (no rotation on later checks);
+  emits a `webhook:secret_backfilled` audit event once.
+- **Admin-source unchanged:** admin-set URLs are still not auto-minted or
+  echoed over `/v1/check` (their secret is managed out-of-band and shown once
+  in the admin UI). Pinned by test. Widening that to instant-push admin
+  receivers remains an open product decision.
+- Affected clients (e.g. ASM tenants that self-registered before secrets
+  existed) self-heal on their next heartbeat with no admin action.
 
 ## v1.3.0 — in-app backup/restore (local + S3, manual + scheduled)
 
