@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.4.1 — dead-channel warning in the license edit modal
+
+Consistency follow-up to v1.4.0. The list's "No secret" badge tells operators to
+"click Update", but the edit modal it sends them to showed no such signal. The
+modal now renders an inline warning (reusing the `.error` style) in edit mode
+when a license has a `webhook_url` but no `webhook_secret` — source-agnostic,
+mirroring the list badge. Toggled client-side from the existing licenses-data
+block (no new data exposed; the raw secret handling is unchanged).
+
 ## v1.4.0 — admin visibility for dead webhook push-channels
 
 A license with a `webhook_url` set but no `webhook_secret` has a silently-dead
