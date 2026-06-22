@@ -101,6 +101,19 @@ def check(body: CheckIn, request: Request, db: Session = Depends(get_db)) -> Che
         max_users=lic.max_users,
         license_id=lic.id,
         product=lic.product.slug,
+        # Echo the signing secret ONLY for self-source licenses. The /v1/check
+        # caller is authenticated solely by the license KEY (services/check.py)
+        # and is NOT guaranteed to be the operator who owns an admin-configured
+        # receiver. Disclosing an admin secret here would be a privilege
+        # downgrade / confused-deputy leak — and it buys nothing: admin push
+        # already works via the secret minted at issuance + the deliver gate in
+        # app/webhooks.py (which keys on webhook_url AND webhook_secret, not on
+        # source). The industry invariant (Stripe/GitHub/Svix/Shopify) is that a
+        # webhook secret is disclosed only to the endpoint owner over an
+        # owner-authenticated channel, never echoed over the client poll channel.
+        # The sanctioned way to move a license into the echo path is the explicit,
+        # audited "convert to self" admin action. Do NOT drop the == "self" guard.
+        # Pinned by tests/test_check.py::test_check_no_backfill_for_admin_source.
         webhook_secret=(
             lic.webhook_secret if lic.webhook_url_source == "self" else None
         ),

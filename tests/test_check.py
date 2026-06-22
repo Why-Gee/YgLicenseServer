@@ -316,9 +316,13 @@ def test_check_backfill_is_idempotent(client: TestClient) -> None:
 
 
 def test_check_no_backfill_for_admin_source(client: TestClient) -> None:
-    """Admin-source URLs are NOT auto-minted over /v1/check (admin secrets are
-    managed out-of-band; widening that is a separate product decision). Even a
-    secret-less admin-source row stays NULL and the secret is never echoed."""
+    """Admin-source URLs are NOT auto-minted over /v1/check and their secret is
+    never echoed. Admin secrets are owner-managed out-of-band (admin UI reveal /
+    Bearer API) — echoing one to the key-authenticated client would be a
+    privilege downgrade. The sanctioned route into the echo path is the explicit
+    "convert to self" action (see test_wo_tracker_findings::
+    test_convert_to_self_then_v1check_echoes_secret). Even a secret-less
+    admin-source row stays NULL here."""
     _create_product(client)
     key = _issue(client)
     _set_license_state(
