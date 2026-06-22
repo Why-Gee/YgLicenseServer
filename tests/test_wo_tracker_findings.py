@@ -169,6 +169,143 @@ def test_convert_to_self_rejects_when_no_url(client: TestClient) -> None:
     assert "error=" in r2.headers["location"]
 
 
+def _valid_until_str(lid: str) -> str:
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        return s.query(License).filter_by(id=lid).one().valid_until.strftime("%Y-%m-%dT%H:%M")
+
+
+def test_edit_preserves_self_source_when_url_unchanged(client: TestClient) -> None:
+    """Regression: a plain license edit (changing plan/max_users/features) must
+    NOT relabel a self-registered webhook as admin-source. The edit modal's form
+    always carries the existing webhook_url, and edit_license used to re-apply it
+    with source='admin' on every save -- silently re-locking the channel and
+    killing /v1/check secret echo. This is exactly what reverted raanana after a
+    Convert-to-self."""
+    cookies = _login(client)
+    _create_product(client)
+    lid, _ = _issue_admin_set(client, cookies, "https://customer.example.com/wh")
+    # Make it self-source (the state we must preserve across edits).
+    client.post(
+        f"/admin/licenses/{lid}/webhook/convert-to-self",
+        data={"csrf_token": _csrf(cookies)}, cookies=cookies, follow_redirects=False,
+    )
+
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        assert lic.webhook_url_source == "self"
+        secret_before = lic.webhook_secret
+        url_before = lic.webhook_url
+
+    # Plain edit: bump max_users, resend the SAME webhook_url (as the modal does),
+    # no rotate.
+    r = client.post(
+        f"/admin/licenses/{lid}/edit",
+        data={
+            "plan": "standard", "max_users": "42",
+            "valid_until": _valid_until_str(lid), "features_json": "{}",
+            "webhook_url": url_before,
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        assert lic.max_users == 42, "edit must still apply"
+        assert lic.webhook_url_source == "self", "self-source must survive a plain edit"
+        assert lic.webhook_url == url_before, "url unchanged"
+        assert lic.webhook_secret == secret_before, "secret must not rotate on a no-op webhook"
+
+
+def test_edit_heals_missing_secret_without_relabeling_source(client: TestClient) -> None:
+    """A self-source row that lost its secret (dead channel) must get one minted
+    on a plain edit -- preserving the pre-fix heal behavior -- WITHOUT flipping
+    the source back to admin."""
+    cookies = _login(client)
+    _create_product(client)
+    lid, _ = _issue_admin_set(client, cookies, "https://customer.example.com/wh")
+    client.post(
+        f"/admin/licenses/{lid}/webhook/convert-to-self",
+        data={"csrf_token": _csrf(cookies)}, cookies=cookies, follow_redirects=False,
+    )
+
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        lic.webhook_secret = None  # force the dead-channel state
+        s.commit()
+        url_before = lic.webhook_url
+
+    r = client.post(
+        f"/admin/licenses/{lid}/edit",
+        data={
+            "plan": "standard", "max_users": "7",
+            "valid_until": _valid_until_str(lid), "features_json": "{}",
+            "webhook_url": url_before,
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        assert lic.webhook_secret, "missing secret must be healed on edit"
+        assert lic.webhook_url_source == "self", "heal must not relabel source to admin"
+
+
+def test_edit_changing_url_sets_admin_source(client: TestClient) -> None:
+    """Intended behaviour preserved: if the admin actually changes the webhook
+    URL via the edit form, they're now managing it -> source flips to admin."""
+    cookies = _login(client)
+    _create_product(client)
+    lid, _ = _issue_admin_set(client, cookies, "https://customer.example.com/wh")
+    client.post(
+        f"/admin/licenses/{lid}/webhook/convert-to-self",
+        data={"csrf_token": _csrf(cookies)}, cookies=cookies, follow_redirects=False,
+    )
+
+    r = client.post(
+        f"/admin/licenses/{lid}/edit",
+        data={
+            "plan": "standard", "max_users": "10",
+            "valid_until": _valid_until_str(lid), "features_json": "{}",
+            "webhook_url": "https://new-admin.example.com/wh",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        assert lic.webhook_url == "https://new-admin.example.com/wh"
+        assert lic.webhook_url_source == "admin", "admin set a new URL via the edit form"
+
+
+def test_modal_card_css_scrolls_when_tall(client: TestClient) -> None:
+    """Bug: a tall license modal overflowed the viewport with no scroll, so the
+    Save button was clipped/unclickable. The shared .modal-card must cap its
+    height and scroll its overflow."""
+    cookies = _login(client)
+    _create_product(client)
+    r = client.get("/admin/products/asm", cookies=cookies)
+    assert r.status_code == 200
+    m = re.search(r"\.modal-card\s*\{[^}]*\}", r.text)
+    assert m, ".modal-card CSS rule missing"
+    rule = m.group(0)
+    assert "max-height" in rule, ".modal-card must cap its height"
+    assert "overflow-y" in rule or "overflow:" in rule, ".modal-card must scroll overflow"
+
+
 def test_convert_to_self_rejects_when_already_self(client: TestClient) -> None:
     """Re-convert is a no-op + error; the button should never show in this
     state, but the endpoint must defend against repeat clicks."""

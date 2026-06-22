@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.4.4 — license edit no longer re-locks a self-registered webhook; modal scrolls
+
+Two admin-UI bug fixes found while activating raanana's webhook.
+
+- **Edit stopped silently re-locking `self` webhooks to `admin`.** The license
+  edit modal's form always carries the existing `webhook_url`, and
+  `edit_license` re-applied it with `source="admin"` on *every* save — so a plain
+  "Save Changes" (editing plan/features/etc.) relabeled a self-registered webhook
+  as admin-source, which stops `/v1/check` from echoing the signing secret and
+  re-locks the URL against self-registration. (This is what reverted raanana right
+  after a Convert-to-self.) `edit_license` now only touches the webhook config
+  when the URL actually changed or a rotate was explicitly requested; an unrelated
+  edit leaves `webhook_url` / `webhook_secret` / `webhook_url_source` untouched. A
+  bare http-opt-in toggle is applied without disturbing them.
+- **The edit modal scrolls instead of clipping its buttons.** `.modal-card` had a
+  `max-width` but no height cap, so a tall modal (webhook + secret-reveal sections
+  expanded) overflowed the viewport with no scroll and the Save button became
+  unreachable. It now caps at `100vh - 2em` and scrolls its overflow (fixes every
+  `.modal-card` dialog).
+
+No schema change.
+
 ## v1.4.3 — dead-channel health badge on the webhook-deliveries page
 
 Completes the dead-channel visibility surfaces. The webhook-deliveries page lists
