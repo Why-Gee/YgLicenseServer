@@ -317,6 +317,12 @@
                   title="POST a synthetic license.test event to the saved URL using the persisted signing secret">Test</button>
         </div>
         <small id="lm-update-hint" class="muted" style="display:none;margin-top:.3em;">Update saves only the webhook URL + (re)generates the signing secret. Other field edits are not saved by Update — use Save Changes for that. Test uses the currently-saved URL + secret.</small>
+        {# Dead-channel warning: a URL with no signing secret means LS suppresses
+           every delivery (webhooks.deliver_* short-circuits). Mirrors the list's
+           "No secret" badge; JS toggles it in edit mode when url set + no secret. #}
+        <div id="lm-webhook-deadchannel" class="error" style="display:none;margin:.5em 0 0;padding:.5em .8em;font-size:.85em;">
+          No signing secret on file — webhook deliveries are suppressed. Click <strong>Update</strong> above to mint a secret and activate the channel.
+        </div>
       </div>
       <div id="lm-allow-http-row" style="grid-column:1/-1;display:none;">
         <label style="display:inline-flex;align-items:center;gap:.4em;font-weight:normal;">
@@ -442,6 +448,7 @@
   var updateBtn = document.getElementById('lm-update-btn');
   var testBtn = document.getElementById('lm-test-btn');
   var updateHint = document.getElementById('lm-update-hint');
+  var deadChannelEl = document.getElementById('lm-webhook-deadchannel');
   var applyBtn = document.getElementById('lm-apply');
   var submitBtn = document.getElementById('lm-submit');
   var cancelBtn = document.getElementById('lm-cancel');
@@ -664,6 +671,9 @@
         secretRow.style.display = 'none';
         secretEl.textContent = '';
       }
+      // Dead-channel warning: URL set but no signing secret → deliveries are
+      // suppressed. Source-agnostic (admin + self both need a secret).
+      deadChannelEl.style.display = (lic.webhook_url && !lic.webhook_secret) ? '' : 'none';
       // Update button: edit-mode only. Posts to the dedicated webhook
       // endpoint -- saves ONLY the webhook URL + regenerates the secret,
       // doesn't touch other field edits. Hint tells the user that.
@@ -710,6 +720,7 @@
       rotateRow.style.display = 'none';
       rotateCb.checked = false;
       secretRow.style.display = 'none';
+      deadChannelEl.style.display = 'none';
       updateBtn.style.display = 'none';
       testBtn.style.display = 'none';
       updateHint.style.display = 'none';
