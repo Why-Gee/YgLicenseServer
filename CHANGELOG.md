@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.3.1 — auto-heal missing webhook secrets on /v1/check
+
+Bug fix for dormant outbound webhooks. A `self`-source license that registered
+its `webhook_url` on an LS build predating secret-minting (or had its secret
+wiped) was permanently stuck with `webhook_secret = NULL`: the mint only ever
+fired on a URL *change*, so `webhooks.deliver_*` short-circuited and `/v1/check`
+returned no secret to the client. The instant push channel never came up.
+
+- **Auto-heal in `app/services/check.py`:** on any `/v1/check`, a `self`-source
+  license that carries a `webhook_url` but no secret now gets one minted —
+  even when the URL is unchanged. Idempotent (no rotation on later checks);
+  emits a `webhook:secret_backfilled` audit event once.
+- **Admin-source unchanged:** admin-set URLs are still not auto-minted or
+  echoed over `/v1/check` (their secret is managed out-of-band and shown once
+  in the admin UI). Pinned by test. Widening that to instant-push admin
+  receivers remains an open product decision.
+- Affected clients (e.g. ASM tenants that self-registered before secrets
+  existed) self-heal on their next heartbeat with no admin action.
+
 ## v1.3.0 — in-app backup/restore (local + S3, manual + scheduled)
 
 Operator-facing backup layer (the raw VM→GCS snapshot from v0.11 stays as

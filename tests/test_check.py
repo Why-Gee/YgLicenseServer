@@ -151,6 +151,27 @@ def _read_license(key: str):
         return s.query(License).filter_by(key=key).one()
 
 
+def _set_license_state(key: str, **fields) -> None:
+    """Force License columns directly — used to recreate legacy / boundary
+    states (e.g. a self-registered URL with a NULL secret) that the public
+    API won't produce on its own."""
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(key=key).one()
+        for k, v in fields.items():
+            setattr(lic, k, v)
+        s.commit()
+
+
+def _count_events(key: str, type_: str) -> int:
+    from app.db import SessionLocal
+    from app.models import Event, License
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(key=key).one()
+        return s.query(Event).filter_by(license_id=lic.id, type=type_).count()
+
+
 def test_check_returns_webhook_secret(client: TestClient) -> None:
     """Secret is returned only when client self-registers a URL via public_url."""
     _create_product(client)
@@ -237,3 +258,93 @@ def test_check_public_url_rejects_overlong(client: TestClient) -> None:
         "public_url": overlong,
     })
     assert r.status_code == 400
+
+
+# ---------- auto-heal: backfill a missing secret for self-source URLs -----
+#
+# A self-source license that registered its webhook_url on an LS build
+# predating secret-minting (or had it wiped) is permanently stuck with
+# webhook_secret = NULL — the mint only fired on a URL *change*. So
+# `webhooks.deliver_*` short-circuits and `/v1/check` returns no secret.
+# Auto-heal: a self-source license carrying a URL must always have a secret,
+# minted on any /v1/check even when the URL is unchanged.
+
+_WH = "https://tenant.example/wh"
+
+
+def test_check_backfills_secret_for_self_source_unchanged_url(client: TestClient) -> None:
+    """URL set + source='self' + secret NULL → next /v1/check (same URL) mints
+    the secret and the response echoes it."""
+    _create_product(client)
+    key = _issue(client)
+    # Self-register: sets url, source='self', mints a secret.
+    client.post("/v1/check", json={
+        "key": key, "install_id": "i1", "version": "1.0.0", "public_url": _WH,
+    })
+    # Recreate the legacy stuck state: wipe the secret, keep the URL/source.
+    _set_license_state(key, webhook_secret=None)
+    assert _read_license(key).webhook_secret is None
+
+    r = client.post("/v1/check", json={
+        "key": key, "install_id": "i1", "version": "1.0.0", "public_url": _WH,
+    })
+    assert r.status_code == 200
+    assert r.json()["webhook_secret"].startswith("whsec_")
+    assert _read_license(key).webhook_secret.startswith("whsec_")
+    assert _count_events(key, "webhook:secret_backfilled") == 1
+
+
+def test_check_backfill_is_idempotent(client: TestClient) -> None:
+    """A second /v1/check after a backfill returns the SAME secret (no
+    rotation) and emits no further backfill event."""
+    _create_product(client)
+    key = _issue(client)
+    client.post("/v1/check", json={
+        "key": key, "install_id": "i1", "version": "1.0.0", "public_url": _WH,
+    })
+    _set_license_state(key, webhook_secret=None)
+
+    r1 = client.post("/v1/check", json={
+        "key": key, "install_id": "i1", "version": "1.0.0", "public_url": _WH,
+    })
+    secret1 = r1.json()["webhook_secret"]
+    r2 = client.post("/v1/check", json={
+        "key": key, "install_id": "i1", "version": "1.0.0", "public_url": _WH,
+    })
+    assert r2.json()["webhook_secret"] == secret1
+    assert _count_events(key, "webhook:secret_backfilled") == 1
+
+
+def test_check_no_backfill_for_admin_source(client: TestClient) -> None:
+    """Admin-source URLs are NOT auto-minted over /v1/check (admin secrets are
+    managed out-of-band; widening that is a separate product decision). Even a
+    secret-less admin-source row stays NULL and the secret is never echoed."""
+    _create_product(client)
+    key = _issue(client)
+    _set_license_state(
+        key, webhook_url=_WH, webhook_url_source="admin", webhook_secret=None,
+    )
+
+    r = client.post("/v1/check", json={
+        "key": key, "install_id": "i1", "version": "1.0.0", "public_url": _WH,
+    })
+    assert r.status_code == 200
+    assert r.json().get("webhook_secret") in (None, "")
+    assert _read_license(key).webhook_secret is None
+    assert _count_events(key, "webhook:secret_backfilled") == 0
+
+
+def test_check_no_backfill_when_secret_present(client: TestClient) -> None:
+    """A self-source license that already has a secret is untouched on an
+    unchanged-URL heartbeat — no rotation, no backfill event."""
+    _create_product(client)
+    key = _issue(client)
+    r0 = client.post("/v1/check", json={
+        "key": key, "install_id": "i1", "version": "1.0.0", "public_url": _WH,
+    })
+    secret0 = r0.json()["webhook_secret"]
+    r1 = client.post("/v1/check", json={
+        "key": key, "install_id": "i1", "version": "1.0.0", "public_url": _WH,
+    })
+    assert r1.json()["webhook_secret"] == secret0
+    assert _count_events(key, "webhook:secret_backfilled") == 0

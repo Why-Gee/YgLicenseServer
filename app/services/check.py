@@ -99,6 +99,24 @@ def check_license(
                 # same URL leaves the existing secret in place.
                 if not lic.webhook_secret:
                     lic.webhook_secret = webhooks.generate_secret()
+        elif lic.webhook_url_source == "self" and not lic.webhook_secret:
+            # Auto-heal. URL is unchanged but a self-source license is missing
+            # its secret — the row registered its URL on an LS build predating
+            # secret-minting (or the secret was wiped). Without this, the mint
+            # above only ever fires on a URL *change*, so the license stays
+            # secret-less forever: outbound delivery short-circuits in
+            # webhooks.deliver_* and /v1/check can't hand the secret to the
+            # client. Mint on first sight here so the channel un-gates with no
+            # admin action. Idempotent: once minted, `not webhook_secret` is
+            # False so this never re-fires (no rotation on subsequent checks).
+            log.info("license %s webhook_secret backfilled (self-source)", lic.id)
+            lic.webhook_secret = webhooks.generate_secret()
+            db.add(Event(
+                license_id=lic.id, product_id=lic.product_id,
+                type="webhook:secret_backfilled",
+                payload={"via": "v1_check_autoheal"},
+                note="service/check",
+            ))
 
     install = (
         db.query(Install)
