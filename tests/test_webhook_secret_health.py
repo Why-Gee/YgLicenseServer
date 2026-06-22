@@ -260,3 +260,53 @@ def test_raw_secret_never_in_page_source_without_reveal(client: TestClient) -> N
 
     html = client.get("/admin/products/asm", cookies=cookies).text
     assert "whsec_CANARY_LEAK" not in html
+
+
+# ---- deliveries page: Configured-receivers health badge (v1.4.3) ---------
+#
+# The webhook-deliveries page lists every license with a webhook_url under
+# "Configured receivers". A receiver whose license has no webhook_secret is a
+# silently-dead channel (deliver_* short-circuits), so the row must carry the
+# same On / "No secret" health signal as the product-detail list — server
+# rendered, so it's the boolean condition only and never the secret value.
+
+
+def test_deliveries_dead_channel_shows_no_secret_badge(client: TestClient) -> None:
+    """A configured receiver with no secret → 'No secret' warning, not 'On'."""
+    cookies = _login(client)
+    _create_product(client)
+    key = _issue(client)
+    _set_state(key, webhook_url="https://t.example/wh", webhook_secret=None)
+
+    r = client.get("/admin/webhook-deliveries", cookies=cookies)
+    assert r.status_code == 200
+    assert "No secret" in r.text
+    assert ">On<" not in r.text
+
+
+def test_deliveries_healthy_channel_shows_on_badge(client: TestClient) -> None:
+    """A configured receiver with a secret → green 'On', no warning."""
+    cookies = _login(client)
+    _create_product(client)
+    key = _issue(client)
+    _set_state(key, webhook_url="https://t.example/wh", webhook_secret="whsec_x")
+
+    r = client.get("/admin/webhook-deliveries", cookies=cookies)
+    assert r.status_code == 200
+    assert ">On<" in r.text
+    assert "No secret" not in r.text
+
+
+def test_deliveries_configured_receiver_never_leaks_secret(client: TestClient) -> None:
+    """The badge is a boolean condition — the raw secret value must never reach
+    the deliveries page source."""
+    cookies = _login(client)
+    _create_product(client)
+    key = _issue(client)
+    _set_state(key, webhook_url="https://t.example/wh", webhook_secret="whsec_DELIV_CANARY")
+
+    r = client.get("/admin/webhook-deliveries", cookies=cookies)
+    assert "whsec_DELIV_CANARY" not in r.text
+    # Positive pin too: the badge must actually render (a regression that dropped
+    # the whole Push cell would pass an absence-only check).
+    assert ">On<" in r.text
