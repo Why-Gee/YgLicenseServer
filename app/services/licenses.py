@@ -319,8 +319,14 @@ def edit_license(
         # exceptions that do NOT touch the source:
         #   - heal a URL-bearing row that's missing its secret (preserves the
         #     pre-fix behavior of backfilling a dead channel on save), and
-        #   - apply a bare http-opt-in toggle, re-validating the stored URL under
-        #     the new flag so disabling http on an http:// row fails fast.
+        #   - apply the http-allow toggle in EITHER direction. The edit form now
+        #     always posts an explicit flag (the checkbox has a hidden "0"
+        #     companion), so un-ticking actually clears the row. The old form
+        #     omitted an unchecked box, leaving this None ("preserve") and
+        #     silently dropping the OFF direction. Re-validates the stored URL
+        #     under the new flag, so disabling http on an http:// row fails fast.
+        #     `allow_http_webhook is None` still means "leave alone" for
+        #     programmatic callers that omit it.
         if new_url and not lic.webhook_secret:
             lic.webhook_secret = wh.generate_secret()
         if (

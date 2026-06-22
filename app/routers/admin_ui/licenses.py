@@ -108,7 +108,12 @@ def license_edit(
             plan=plan, max_users=max_users, valid_until_raw=valid_until,
             features_json=features_json,
             webhook_url=webhook_url,
-            allow_http_webhook=(allow_http_webhook == "1") if allow_http_webhook else None,
+            # The edit modal always renders the allow-http control, and its
+            # hidden companion input makes an unchecked box still post "0" (an
+            # unchecked checkbox is otherwise omitted entirely). So this form
+            # always expresses an explicit True/False -- never the "preserve"
+            # (None) state -- which is what lets un-ticking actually revoke.
+            allow_http_webhook=(allow_http_webhook == "1"),
             rotate_secret=rotate_secret == "1",
             note="ui/edit",
             schedule=bg.add_task,

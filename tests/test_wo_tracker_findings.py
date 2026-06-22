@@ -378,6 +378,117 @@ def test_modal_card_css_scrolls_when_tall(client: TestClient) -> None:
     assert "overflow-y" in rule or "overflow:" in rule, ".modal-card must scroll overflow"
 
 
+def test_edit_unticking_allow_http_revokes_flag(client: TestClient) -> None:
+    """Regression (v1.4.6): un-ticking 'Allow plain http' on the edit modal and
+    saving must clear allow_http_webhook. An unchecked HTML checkbox is omitted
+    from the POST; the edit route previously mapped that absence to None
+    ('preserve'), silently dropping the OFF direction. The route now treats any
+    value that isn't '1' (including absence) as explicit OFF.
+
+    Uses an https URL carrying a *stale* allow_http=1 flag: that is the row a
+    user legitimately wants to clear. (Clearing the flag on an http:// row
+    instead fails fast by design -- you can't keep an http URL with http
+    disabled -- so it can't demonstrate the clear path; see the companion test.)
+    """
+    cookies = _login(client)
+    _create_product(client)
+    lid = _issue_with_http_flag(client, cookies, "https://customer.example.com/wh")
+
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        assert lic.allow_http_webhook == 1, "stale flag set at issue"
+        url_before = lic.webhook_url
+
+    # Plain edit: URL unchanged, no rotate, checkbox UNCHECKED. Omit the field
+    # to mimic the unchecked box (the bug) and prove the route reads absence
+    # as OFF.
+    r = client.post(
+        f"/admin/licenses/{lid}/edit",
+        data={
+            "plan": "standard", "max_users": "10",
+            "valid_until": _valid_until_str(lid), "features_json": "{}",
+            "webhook_url": url_before,
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        assert lic.allow_http_webhook == 0, "un-ticking must revoke http permission"
+        assert lic.webhook_url == url_before, "URL untouched by a plain edit"
+
+
+def test_edit_ticking_allow_http_sets_flag_via_companion(client: TestClient) -> None:
+    """Guard the ON direction: a *checked* box posts the hidden companion's "0"
+    AND the checkbox's "1" (in that order). The route must read it as True --
+    i.e. the last value wins -- otherwise adding the hidden companion would
+    silently break turning the flag ON."""
+    cookies = _login(client)
+    _create_product(client)
+    lid = _issue_admin_set(client, cookies, "https://customer.example.com/wh")[0]
+
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        assert lic.allow_http_webhook == 0  # not set at issue
+        url_before = lic.webhook_url
+
+    # Checked box == the rendered form posts both fields, hidden "0" then "1".
+    r = client.post(
+        f"/admin/licenses/{lid}/edit",
+        data={
+            "plan": "standard", "max_users": "10",
+            "valid_until": _valid_until_str(lid), "features_json": "{}",
+            "webhook_url": url_before,
+            "allow_http_webhook": ["0", "1"],
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+
+    with SessionLocal() as s:
+        lic = s.query(License).filter_by(id=lid).one()
+        assert lic.allow_http_webhook == 1, "checked box (hidden '0' + '1') must set the flag"
+
+
+def test_edit_modal_has_allow_http_off_companion(client: TestClient) -> None:
+    """The 'Allow plain http' checkbox needs a hidden companion that posts '0',
+    so an unchecked box still expresses OFF (an unchecked checkbox is omitted
+    from the POST). The hidden input must PRECEDE the checkbox so that when the
+    box is checked its later '1' wins the last-value-wins form parse."""
+    cookies = _login(client)
+    _create_product(client)
+    _issue_admin_set(client, cookies, "https://admin.example.com/wh")
+    html = client.get("/admin/products/asm", cookies=cookies).text
+    hidden_idx = html.find('<input type="hidden" name="allow_http_webhook" value="0">')
+    checkbox_idx = html.find('id="lm-allow-http"')
+    assert hidden_idx != -1, "missing hidden '0' companion for allow_http_webhook"
+    assert checkbox_idx != -1, "allow-http checkbox missing"
+    assert hidden_idx < checkbox_idx, "hidden '0' must precede the checkbox (last value wins)"
+
+
+def _issue_with_http_flag(c: TestClient, cookies: dict[str, str], url: str) -> str:
+    """Issue a license carrying webhook `url` with allow_http_webhook=1. Returns lid."""
+    r = c.post(
+        "/admin/products/asm/licenses",
+        data={
+            "email": "x@example.com", "plan": "standard", "max_users": "10",
+            "valid_days": "30", "features_json": "{}",
+            "webhook_url": url, "allow_http_webhook": "1",
+            "csrf_token": _csrf(cookies),
+        },
+        cookies=cookies, follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    return re.search(r"issued=([^&]+)", r.headers["location"]).group(1)
+
+
 def test_convert_to_self_rejects_when_already_self(client: TestClient) -> None:
     """Re-convert is a no-op + error; the button should never show in this
     state, but the endpoint must defend against repeat clicks."""
