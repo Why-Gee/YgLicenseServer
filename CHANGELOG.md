@@ -14,9 +14,11 @@ admin list rendered a green "On" — no hint that nothing was being delivered.
   `has_webhook_secret` boolean so a monitor can detect dead channels
   programmatically. The raw signing secret is never exposed over the list API.
 
-No schema change. (Follow-up to v1.3.1's `/v1/check` secret auto-heal: that fix
-prevents NEW dead self-source channels; this makes any pre-existing dead channel
-— including admin-source ones the auto-heal deliberately skips — visible.)
+No schema change. Companion to the separate `/v1/check` secret auto-heal change
+(PR #77): that fix stops NEW dead self-source channels from forming; this makes
+any *pre-existing* dead channel — including admin-source ones the auto-heal
+deliberately skips — visible. The two are independent; if both land, merge the
+auto-heal first so the version sequence stays contiguous.
 
 ## v1.3.0 — in-app backup/restore (local + S3, manual + scheduled)
 

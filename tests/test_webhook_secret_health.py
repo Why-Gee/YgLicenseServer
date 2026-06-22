@@ -89,6 +89,9 @@ def test_ui_dead_channel_shows_no_secret_badge(client: TestClient) -> None:
     r = client.get("/admin/products/asm", cookies=cookies)
     assert r.status_code == 200
     assert "No secret" in r.text
+    # Must NOT also read a green "On" — the whole point is it's a dead channel.
+    assert ">On<" not in r.text
+    assert 'data-sort-value="1"' in r.text  # health rank: dead = 1
 
 
 def test_ui_healthy_channel_shows_on_badge(client: TestClient) -> None:
@@ -102,6 +105,7 @@ def test_ui_healthy_channel_shows_on_badge(client: TestClient) -> None:
     assert r.status_code == 200
     assert ">On<" in r.text
     assert "No secret" not in r.text
+    assert 'data-sort-value="2"' in r.text  # health rank: live = 2
 
 
 def test_ui_no_url_shows_dash_not_warning(client: TestClient) -> None:
@@ -113,3 +117,4 @@ def test_ui_no_url_shows_dash_not_warning(client: TestClient) -> None:
     r = client.get("/admin/products/asm", cookies=cookies)
     assert r.status_code == 200
     assert "No secret" not in r.text
+    assert 'data-sort-value="0"' in r.text  # health rank: no channel = 0

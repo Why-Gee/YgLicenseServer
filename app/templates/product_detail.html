@@ -123,7 +123,7 @@
           <td class="muted" style="font-size:.85em;" data-sort-value="{{ '2' if (lic.webhook_url and lic.webhook_secret) else ('1' if lic.webhook_url else '0') }}">
             {% if not lic.webhook_url %}<span class="muted">—</span>
             {% elif lic.webhook_secret %}<span class="badge active">On</span>
-            {% else %}<span class="badge revoked" title="Webhook URL set but no signing secret on file — deliveries are suppressed. Open the license and rotate the secret (or use Convert to self) to activate the channel.">No secret</span>{% endif %}
+            {% else %}<span class="badge revoked" title="Webhook URL set but no signing secret on file — deliveries are suppressed. Open the license and click Update to mint a secret and activate the channel.">No secret</span>{% endif %}
           </td>
           <td style="white-space:nowrap;">
             {# Toggle: ON = status active. Click flips to /disable or /enable.
