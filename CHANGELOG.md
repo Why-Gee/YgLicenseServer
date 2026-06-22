@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.4.3 — dead-channel health badge on the webhook-deliveries page
+
+Completes the dead-channel visibility surfaces. The webhook-deliveries page lists
+every license with a `webhook_url` under **Configured receivers** ("what would
+fire if anything happened"), but rendered no health signal — a receiver with no
+signing secret looked identical to a live one, even though `deliver_*`
+short-circuits and nothing ever fires.
+
+- **Configured receivers** now has a **Push** column with the same On / **No
+  secret** badge as the product-detail list. Every row there has a URL, so it's
+  two-state (live vs dead). Boolean condition only — the secret value is never
+  emitted into the page.
+
+No schema/API change. Pairs with v1.4.0 (product list + API) and v1.4.1 (edit
+modal); same signal, third surface.
+
 ## v1.4.2 — stop broadcasting webhook signing secrets into page source
 
 Security hardening. The admin product-detail page embedded a `#licenses-data`

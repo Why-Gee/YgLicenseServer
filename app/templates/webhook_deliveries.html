@@ -29,6 +29,7 @@
       <th>License key</th>
       <th>Customer</th>
       <th>Receiver URL</th>
+      <th>Push</th>
     </tr></thead>
     <tbody>
     {% for lic in configured_licenses %}
@@ -38,6 +39,14 @@
         <td class="muted">{{ lic.customer.email if lic.customer else '—' }}</td>
         <td class="muted" style="max-width:24rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{{ lic.webhook_url }}">
           <code style="font-size:.8em;">{{ lic.webhook_url }}</code>
+        </td>
+        {# Channel health. Every row here has a webhook_url (that's the filter),
+           so it's 2-state: live vs dead. A missing signing secret means
+           deliver_* short-circuits -- the receiver is configured but nothing
+           fires. Boolean condition only; the secret value is never emitted. #}
+        <td style="font-size:.85em;">
+          {% if lic.webhook_secret %}<span class="badge active">On</span>
+          {% else %}<span class="badge revoked" title="No signing secret on file — deliveries are suppressed. Open the license and click Update to mint a secret and activate the channel.">No secret</span>{% endif %}
         </td>
       </tr>
     {% endfor %}
