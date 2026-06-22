@@ -332,6 +332,12 @@
       </div>
       <div id="lm-allow-http-row" style="grid-column:1/-1;display:none;">
         <label style="display:inline-flex;align-items:center;gap:.4em;font-weight:normal;">
+          {# Hidden companion: an unchecked checkbox posts nothing, so without
+             this the OFF direction is silently dropped on save. This always
+             posts "0"; a checked box adds a later "1" that wins (Starlette keeps
+             the last value for a repeated field). Result: checked -> "1",
+             unchecked -> "0". MUST stay before the checkbox. #}
+          <input type="hidden" name="allow_http_webhook" value="0">
           <input id="lm-allow-http" name="allow_http_webhook" type="checkbox" value="1"
                  style="width:auto;margin:0;">
           Allow plain http:// (LAN install only)

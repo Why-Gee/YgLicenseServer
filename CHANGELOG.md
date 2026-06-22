@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.4.6 — un-ticking "Allow plain http" now actually revokes it
+
+Pre-existing low-severity bug (found in the v1.4.4/v1.4.5 adversarial review; not
+introduced by the v1.4.x webhook-source fixes). Un-ticking **"Allow plain http"**
+in the license edit modal and saving did not clear `allow_http_webhook` — the flag
+stayed `1`. An unchecked HTML checkbox is omitted from the POST, so the edit route
+read the field as `None` ("preserve"), indistinguishable from "leave alone", and
+the OFF direction was silently dropped. There was no way to revoke the flag from
+the edit form without also changing the URL or rotating the secret.
+
+The checkbox now ships a hidden `value="0"` companion, so an unchecked box still
+posts an explicit OFF (a checked box's later `"1"` wins the last-value-wins form
+parse), and the edit route maps the field to a plain True/False instead of None.
+Turning the flag off on an `https://` row clears it; on an `http://` row it still
+fails fast by design (you can't keep an http URL with http disabled). Pinned by
+tests for the revoke-on-save behaviour and the hidden-companion wiring.
+
+No schema change.
+
 ## v1.4.5 — rotating a secret no longer re-locks a self-registered webhook
 
 Follow-up to v1.4.4 (caught in adversarial review). The v1.4.4 fix still passed
