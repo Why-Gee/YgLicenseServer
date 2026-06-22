@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.4.2 — stop broadcasting webhook signing secrets into page source
+
+Security hardening. The admin product-detail page embedded a `#licenses-data`
+JSON block that emitted every license's **raw `webhook_secret`** (the HMAC
+signing key) — so a single view-source on that page exposed the signing secrets
+of all licenses at once. That defeated the existing "reveal the secret once, on
+set/rotate" design: the modal only *displayed* the secret for the flagged row,
+but the value for every row was already sitting in the DOM.
+
+- **`#licenses-data` now carries `has_webhook_secret` (boolean) for all rows**
+  and the raw `webhook_secret` value **only for the single row the server
+  flagged** via `?webhook_lid` / `?issued` (`reveal_lid`). Every other row gets
+  `""`. The post-set/rotate one-time reveal is unchanged; bulk broadcast is gone.
+- The modal's dead-channel warning toggle now keys on `has_webhook_secret`
+  instead of the raw value.
+
+No schema change, no API change (the list API was already boolean-only since
+v1.4.0). Behaviour visible to operators is identical; the secret simply stops
+leaking into the page for non-revealed rows.
+
 ## v1.4.1 — dead-channel warning in the license edit modal
 
 Consistency follow-up to v1.4.0. The list's "No secret" badge tells operators to

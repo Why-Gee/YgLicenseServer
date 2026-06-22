@@ -7,6 +7,11 @@ sees a green "On" with no hint that nothing is being delivered. Surface it:
 - the JSON list endpoint exposes a `has_webhook_secret` boolean — never the
   secret value itself;
 - the license edit modal shows an inline dead-channel warning (v1.4.1).
+
+v1.4.2 hardening: the licenses-data block no longer emits the raw signing secret
+for every license. It carries a `has_webhook_secret` boolean for all rows and the
+real secret value ONLY for the single just-set/rotated row the server flagged via
+?webhook_lid / ?issued (reveal_lid). Everything else gets an empty string.
 """
 from __future__ import annotations
 
@@ -51,6 +56,13 @@ def _set_state(key: str, **fields) -> None:
         for k, v in fields.items():
             setattr(lic, k, v)
         s.commit()
+
+
+def _get_secret(key: str) -> str | None:
+    from app.db import SessionLocal
+    from app.models import License
+    with SessionLocal() as s:
+        return s.query(License).filter_by(key=key).one().webhook_secret
 
 
 # ---- API: has_webhook_secret boolean (never the secret itself) -----------
@@ -153,9 +165,9 @@ def test_modal_dead_channel_warning_element_wired(client: TestClient) -> None:
 
 
 def test_modal_data_signals_dead_channel(client: TestClient) -> None:
-    """A dead-channel license surfaces a non-empty webhook_url with an EMPTY
-    webhook_secret in licenses-data — the exact condition open() shows the
-    warning on."""
+    """A dead-channel license surfaces a non-empty webhook_url with
+    has_webhook_secret False — the exact condition open() shows the warning on
+    (the JS toggle keys on has_webhook_secret, not the raw value)."""
     cookies = _login(client)
     _create_product(client)
     key = _issue(client)
@@ -163,11 +175,14 @@ def test_modal_data_signals_dead_channel(client: TestClient) -> None:
 
     lic = _licenses_data(client.get("/admin/products/asm", cookies=cookies).text)["licenses"][0]
     assert lic["webhook_url"] == "https://t.example/wh"
-    assert lic["webhook_secret"] == ""  # empty → JS shows the warning
+    assert lic["has_webhook_secret"] is False  # → JS shows the warning
+    assert lic["webhook_secret"] == ""
 
 
-def test_modal_data_healthy_channel_carries_secret(client: TestClient) -> None:
-    """A healthy channel carries a secret → warning condition is false."""
+def test_modal_data_healthy_channel_hides_secret_when_not_revealed(client: TestClient) -> None:
+    """A healthy channel signals presence via has_webhook_secret=True but must
+    NOT carry the raw secret in the data block on an ordinary render (no reveal
+    param). The value only appears on the just-set/rotated reveal row."""
     cookies = _login(client)
     _create_product(client)
     key = _issue(client)
@@ -175,4 +190,73 @@ def test_modal_data_healthy_channel_carries_secret(client: TestClient) -> None:
 
     lic = _licenses_data(client.get("/admin/products/asm", cookies=cookies).text)["licenses"][0]
     assert lic["webhook_url"] == "https://t.example/wh"
-    assert lic["webhook_secret"] == "whsec_x"
+    assert lic["has_webhook_secret"] is True  # warning condition is false
+    assert lic["webhook_secret"] == ""  # NOT leaked on an ordinary render
+
+
+def test_modal_secret_revealed_only_for_its_reveal_row(client: TestClient) -> None:
+    """The raw secret is emitted for exactly the row flagged by ?webhook_lid
+    (so the modal can show it once after set/rotate) — never for any other row."""
+    cookies = _login(client)
+    _create_product(client)
+    k_a = _issue(client, email="a@example.com")
+    k_b = _issue(client, email="b@example.com")
+    _set_state(k_a, webhook_url="https://t.example/a", webhook_secret="whsec_AAA")
+    _set_state(k_b, webhook_url="https://t.example/b", webhook_secret="whsec_BBB")
+
+    # No reveal param → neither raw secret is in the data; presence flags True.
+    data = _licenses_data(client.get("/admin/products/asm", cookies=cookies).text)
+    by_email = {lic["email"]: lic for lic in data["licenses"]}
+    assert by_email["a@example.com"]["webhook_secret"] == ""
+    assert by_email["b@example.com"]["webhook_secret"] == ""
+    assert by_email["a@example.com"]["has_webhook_secret"] is True
+    assert by_email["b@example.com"]["has_webhook_secret"] is True
+
+    # Reveal license A only → A carries its secret, B stays hidden.
+    lid_a = by_email["a@example.com"]["id"]
+    html = client.get(f"/admin/products/asm?webhook_lid={lid_a}", cookies=cookies).text
+    by_email2 = {lic["email"]: lic for lic in _licenses_data(html)["licenses"]}
+    assert by_email2["a@example.com"]["webhook_secret"] == "whsec_AAA"
+    assert by_email2["b@example.com"]["webhook_secret"] == ""  # not the reveal row
+    assert "whsec_BBB" not in html  # other rows' secrets never appear in the page
+
+
+def test_modal_secret_revealed_for_issued_param_freshly_minted(client: TestClient) -> None:
+    """First-ever secret display path: issuing a license WITH a webhook_url mints
+    a secret at issuance and the post-issue redirect carries ?issued=<lid>. That
+    row's freshly-minted secret must be revealed in licenses-data — and only that
+    row's. ?issued and ?webhook_lid feed the same reveal_lid, but this pins the
+    issuance source directly (the only path a brand-new secret reaches the page)."""
+    cookies = _login(client)
+    _create_product(client)
+    _issue(client, email="fresh@example.com", webhook_url="https://t.example/fresh")
+    k_other = _issue(client, email="other@example.com", webhook_url="https://t.example/other")
+    other_secret = _get_secret(k_other)
+    assert other_secret and other_secret.startswith("whsec_")  # minted at issuance
+
+    # No reveal param → neither minted secret is in the data; presence flags True.
+    base = _licenses_data(client.get("/admin/products/asm", cookies=cookies).text)
+    by_email = {lic["email"]: lic for lic in base["licenses"]}
+    assert by_email["fresh@example.com"]["has_webhook_secret"] is True
+    assert by_email["fresh@example.com"]["webhook_secret"] == ""
+    lid_fresh = by_email["fresh@example.com"]["id"]
+
+    # Simulate the post-issue redirect → fresh row reveals its minted secret only.
+    html = client.get(f"/admin/products/asm?issued={lid_fresh}", cookies=cookies).text
+    by_email2 = {lic["email"]: lic for lic in _licenses_data(html)["licenses"]}
+    revealed = by_email2["fresh@example.com"]["webhook_secret"]
+    assert revealed.startswith("whsec_") and len(revealed) > 10
+    assert by_email2["other@example.com"]["webhook_secret"] == ""  # not the reveal row
+    assert other_secret not in html  # the other issued row's secret never leaks
+
+
+def test_raw_secret_never_in_page_source_without_reveal(client: TestClient) -> None:
+    """Canary: with no reveal param, a license's raw signing secret must not
+    appear anywhere in the rendered page source."""
+    cookies = _login(client)
+    _create_product(client)
+    key = _issue(client)
+    _set_state(key, webhook_url="https://t.example/wh", webhook_secret="whsec_CANARY_LEAK")
+
+    html = client.get("/admin/products/asm", cookies=cookies).text
+    assert "whsec_CANARY_LEAK" not in html
