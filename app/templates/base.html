@@ -162,7 +162,10 @@
     .success { background:rgba(63,185,80,.1); border:1px solid var(--ok); padding:.7em 1em; border-radius:4px; color:var(--ok); margin:1em 0; }
     .muted { color:var(--muted); }
     .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; z-index:1000; }
-    .modal-card { background:var(--card); border:1px solid var(--bd); border-radius:8px; padding:1.5em; max-width:520px; width:calc(100% - 2em); box-shadow:0 12px 40px rgba(0,0,0,.6); }
+    /* Cap height to the viewport and scroll overflow so a tall modal (e.g. the
+       license editor with the webhook + secret-reveal sections expanded) never
+       pushes its action buttons off-screen / out of reach. */
+    .modal-card { background:var(--card); border:1px solid var(--bd); border-radius:8px; padding:1.5em; max-width:520px; width:calc(100% - 2em); box-shadow:0 12px 40px rgba(0,0,0,.6); max-height:calc(100vh - 2em); overflow-y:auto; }
     .modal-card h3 { margin:0 0 .5em; }
     .modal-card p { margin:.5em 0; color:var(--fg); }
     .modal-card .step { color:var(--muted); font-size:.8em; text-transform:uppercase; letter-spacing:.05em; margin-bottom:.3em; }

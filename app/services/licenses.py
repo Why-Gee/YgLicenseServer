@@ -295,10 +295,35 @@ def edit_license(
 
     new_url = webhook_url.strip() or None
     prev_secret = lic.webhook_secret
-    apply_webhook_config(
-        lic, url=new_url, rotate=rotate_secret, mint_on_url_change=True,
-        allow_http=allow_http_webhook,
-    )
+    # The license-edit form always carries the *existing* webhook URL, so a plain
+    # "Save Changes" (editing plan/features/etc.) must NOT re-write the webhook
+    # config. Doing so would relabel a self-registered URL as admin-source
+    # (stopping /v1/check from echoing the secret) and could rotate the key.
+    # Only touch the webhook when the admin actually changed the URL or asked to
+    # rotate; otherwise an unrelated edit leaves source/secret/URL untouched.
+    url_changed = new_url != lic.webhook_url
+    if url_changed or rotate_secret:
+        apply_webhook_config(
+            lic, url=new_url, rotate=rotate_secret, mint_on_url_change=True,
+            source="admin", allow_http=allow_http_webhook,
+        )
+    else:
+        # URL unchanged + no rotate: keep URL/secret/source as-is (a plain edit
+        # must not relabel a self-registered webhook as admin-source). Two narrow
+        # exceptions that do NOT touch the source:
+        #   - heal a URL-bearing row that's missing its secret (preserves the
+        #     pre-fix behavior of backfilling a dead channel on save), and
+        #   - apply a bare http-opt-in toggle, re-validating the stored URL under
+        #     the new flag so disabling http on an http:// row fails fast.
+        if new_url and not lic.webhook_secret:
+            lic.webhook_secret = wh.generate_secret()
+        if (
+            allow_http_webhook is not None
+            and bool(lic.allow_http_webhook) != allow_http_webhook
+        ):
+            if new_url and not is_safe_url_shape(new_url, allow_http=allow_http_webhook):
+                raise Unsafe("unsafe webhook url")
+            lic.allow_http_webhook = 1 if allow_http_webhook else 0
     secret_changed = lic.webhook_secret != prev_secret
 
     db.add(Event(

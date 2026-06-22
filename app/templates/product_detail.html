@@ -741,7 +741,10 @@
     // measures user changes, not the create/edit pre-fill.
     guard.takeSnapshot();
     setTimeout(function () {
-      (mode === 'edit' ? planIn : emailIn).focus();
+      // preventScroll: .modal-card is now a scroll container (max-height +
+      // overflow-y), so a plain focus() would scroll the focused field into
+      // view and push the modal's header off the top on open. Keep it at top.
+      (mode === 'edit' ? planIn : emailIn).focus({ preventScroll: true });
     }, 50);
   }
 
