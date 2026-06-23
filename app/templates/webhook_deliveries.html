@@ -9,6 +9,9 @@
 {% if request.query_params.get('error') == 'not_found' %}
 <div class="error">delivery not found.</div>
 {% endif %}
+{% if request.query_params.get('error') == 'not_retryable' %}
+<div class="error">test webhooks aren't retryable — re-send from the license's <strong>Test webhook</strong> button.</div>
+{% endif %}
 
 <p class="muted" style="max-width: 50em;">
   This page shows the <strong>delivery history</strong> of outbound webhooks
@@ -96,6 +99,7 @@
       <th data-sort-key="created" data-sort-type="date">Created</th>
       <th data-sort-key="event">Event</th>
       <th data-sort-key="status">Status</th>
+      <th data-sort-key="response" data-sort-type="number">Response</th>
       <th data-sort-key="attempts" data-sort-type="number">Attempts</th>
       <th data-sort-key="next" data-sort-type="date">Next attempt</th>
       <th data-sort-key="url">URL</th>
@@ -108,12 +112,32 @@
         <td class="muted">{{ d.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
         <td><code style="font-size:.85em;">{{ d.event_type }}</code></td>
         <td>
-          {% if d.status == 'pending' %}
+          {# license.test rows are one-shot probes, not queued deliveries, so
+             the lifecycle words (pending/abandoned, which imply a retry
+             schedule) misread. Show a test-specific label; the stored status is
+             unchanged (delivered/abandoned) so the retry worker still skips them. #}
+          {% if d.event_type == 'license.test' %}
+            {% if d.status == 'delivered' %}<span style="color:#059669;">test ok</span>
+            {% else %}<span style="color:#dc2626;">test failed</span>{% endif %}
+          {% elif d.status == 'pending' %}
             <span style="color:#d97706;">pending</span>
           {% elif d.status == 'delivered' %}
             <span style="color:#059669;">delivered</span>
           {% else %}
             <span style="color:#dc2626;">abandoned</span>
+          {% endif %}
+        </td>
+        {# Receiver's HTTP response on the last attempt. 2xx green / 4xx amber /
+           5xx red; em-dash = never reached the receiver (network/TLS/timeout or
+           SSRF-refusal). The response body excerpt (e.g. a 401 "bad signature")
+           rides in the title for inline debugging. Autoescaped -> XSS-safe. #}
+        <td data-sort-value="{{ d.response_status or 0 }}">
+          {% if d.response_status %}
+            {% if d.response_status < 300 %}<span style="color:#059669;" title="{{ d.response_excerpt or '' }}">{{ d.response_status }}</span>
+            {% elif d.response_status < 500 %}<span style="color:#d97706;" title="{{ d.response_excerpt or '' }}">{{ d.response_status }}</span>
+            {% else %}<span style="color:#dc2626;" title="{{ d.response_excerpt or '' }}">{{ d.response_status }}</span>{% endif %}
+          {% else %}
+            <span class="muted" title="never reached the receiver (network / TLS / timeout, or refused)">—</span>
           {% endif %}
         </td>
         <td>{{ d.attempts }}</td>
@@ -134,7 +158,10 @@
           {{ d.last_error or '' }}
         </td>
         <td>
-          {% if d.status != 'delivered' %}
+          {# No Retry for test rows: they're terminal one-shots and re-queuing
+             one would pollute the durable retry worker. Re-test from the
+             license's "Test webhook" button instead. #}
+          {% if d.status != 'delivered' and d.event_type != 'license.test' %}
           <form method="post" action="/admin/webhook-deliveries/{{ d.id }}/retry" style="margin:0;">
             {{ csrf_input(request) }}
             <button type="submit" class="btn"
@@ -161,7 +188,9 @@
       no deliveries yet. a row appears here every time the server fires a webhook
       (license status change, edit, or delete). to manually trigger one for testing,
       edit a license and use the <strong>Test webhook</strong> button in its edit form,
-      or change its status (revoke / disable / re-enable).
+      or change its status (revoke / disable / re-enable). test sends show up here
+      too, with the response the receiver returned (a well-behaved receiver returns
+      401 when the signing secret is wrong).
     {% endif %}
   </p>
   {% endif %}

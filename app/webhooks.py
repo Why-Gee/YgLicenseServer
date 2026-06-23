@@ -329,6 +329,13 @@ def try_deliver(db: Session, delivery_id: str) -> bool:
     )
     d.attempts += 1
     d.last_attempt_at = utcnow()
+    # Record what the receiver returned (observability). response_status is the
+    # HTTP code, or NULL when we never reached the receiver (network / TLS /
+    # timeout / SSRF-refusal). On a non-2xx, deliver() returns the body excerpt
+    # as `err` -> response_excerpt; network/refusal failures have no body (their
+    # detail lives in last_error), so excerpt stays NULL there.
+    d.response_status = status
+    d.response_excerpt = ((err or "")[:500] or None) if status is not None else None
     if ok:
         d.status = "delivered"
         d.delivered_at = utcnow()
