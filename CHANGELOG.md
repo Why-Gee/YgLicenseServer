@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.4.8 — verified enable/disable webhook instancy; OFF→ON signature regression test
+
+Verification pass (no production-code change) confirming that license enable/disable propagates
+to a consumer install in **both** directions within ~1s, plus one regression test that locks the
+previously-unpinned half.
+
+The concern was that the outbound webhook emitter might be wired only into the disable/revoke
+path (a common shape), so re-activating a license would propagate only on the next safety-net
+poll. It is not: all three transitions (`enable_license`/`disable_license`/`revoke_license`)
+funnel through the single `set_status()` choke-point, which enqueues a `license.status.changed`
+delivery on **every** transition that has a webhook configured, and commits the state change
+**before** the post-commit send so a receiver's immediate `/v1/check` reads the new state. Signing
+(`X-License-Server-Signature: t=…,v1=<hmac-sha256-hex>` over `f"{t}." + raw_body`, single
+serialization, fresh `t` re-signed per retry within the 300s window), verbatim callback-URL
+storage (full `/api/license/webhook` path preserved), and the `/v1/check` 200-EdDSA-JWT /
+401-blocking-reason contract were all re-confirmed against code and tests.
+
+- **New regression test** `test_off_on_roundtrip_both_webhooks_verify_consumer_side` — toggles a
+  throwaway license OFF then ON and asserts each toggle dispatches exactly one webhook to the
+  verbatim registered URL that passes the consumer's byte-for-byte HMAC pseudocode inside the 300s
+  window. The pre-existing signature self-test covered only the disable direction; this pins the
+  **enable** direction's signature, the direction most likely to silently regress in a refactor.
+
+No behavior change; no migration. Final cross-system confirmation (the consumer's
+`license webhook verified` log on each toggle) remains an operator step — the consumer returns 200
+even on a bad signature, so its HTTP status is never proof on its own.
+
 ## v1.4.7 — webhook delivery response observability (see what the receiver returned)
 
 After configuring a webhook there was no way to tell from LS whether the receiver

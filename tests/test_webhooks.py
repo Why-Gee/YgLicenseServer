@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import socket
+import time
 from contextlib import contextmanager
 
 import httpx
@@ -547,6 +548,79 @@ def test_signature_verifies_with_secret_in_db(client: TestClient, monkeypatch) -
         hashlib.sha256,
     ).hexdigest()
     assert hmac.compare_digest(expected, parts["v1"])
+
+
+# ---------- acceptance: OFF->ON round-trip, both webhooks consumer-verifiable ----
+#
+# ASM handoff 2026-06-28 (§e acceptance bar) self-test. The prior signature
+# test above proves only the DISABLE direction. The consumer's instancy needs
+# a verified webhook on BOTH transitions, and disable was already proven on the
+# operator's live slot — ENABLE was the unverified, most-likely-to-regress
+# direction (the emitter could be wired only into disable). This pins, for a
+# THROWAWAY license toggled OFF then ON:
+#   (a) exactly one webhook is dispatched per toggle,
+#   (b) each is POSTed to the VERBATIM registered callback URL (full
+#       `/api/license/webhook` path preserved through /v1/check self-reg),
+#   (c) each passes the consumer's byte-for-byte HMAC pseudocode (§b B3) with
+#       the secret /v1/check handed back, inside the 300s replay window, and
+#   (d) carries the routable data.license_key.
+# Throwaway = ephemeral product/license in the per-test sqlite db; production is
+# never touched. Final cross-system proof still needs the operator to observe
+# the consumer's `license webhook verified` log per toggle (consumer 200s even
+# on a bad signature, so its HTTP status is not proof — only this self-test is).
+
+def test_off_on_roundtrip_both_webhooks_verify_consumer_side(
+    client: TestClient, monkeypatch
+) -> None:
+    _create_product(client)
+    lid = _issue_via_ui(client)  # no webhook yet
+    key = _get_license_key(lid)
+    cookies = _admin_login(client)
+
+    # Self-register the callback exactly as the consumer does: full path
+    # included. /v1/check mints + echoes the per-license secret (source='self').
+    full_url = "https://tenant.example.test/api/license/webhook"
+    reg = client.post("/v1/check", json={
+        "key": key, "install_id": "machine:tenant", "version": "1.93.7",
+        "public_url": full_url,
+    })
+    assert reg.status_code == 200, reg.text
+    secret = reg.json()["webhook_secret"]
+    assert secret and secret.startswith("whsec_"), reg.json()
+
+    for action, current in (("disable", "disabled"), ("enable", "active")):
+        with _captured(monkeypatch) as sent:
+            r = _form_post(
+                client, f"/admin/licenses/{lid}/{action}", cookies,
+                follow_redirects=False,
+            )
+            assert r.status_code == 303
+        # (a) exactly one webhook per toggle — proves ENABLE emits too.
+        assert len(sent) == 1, f"{action}: expected 1 webhook, got {len(sent)}"
+        msg = sent[0]
+        # (b) verbatim path preserved (host is the SSRF-pinned IP, but the
+        # full /api/license/webhook path must survive; original host in Host hdr).
+        assert msg["url"].endswith("/api/license/webhook"), (action, msg["url"])
+        assert msg["headers"].get("host") == "tenant.example.test", msg["headers"]
+        # (c) consumer §b B3 verification, byte-for-byte.
+        parts = dict(
+            p.split("=", 1)
+            for p in msg["headers"]["x-license-server-signature"].split(",")
+        )
+        assert set(parts) == {"t", "v1"}, parts
+        expected = hmac.new(
+            secret.encode(),
+            f"{parts['t']}.".encode() + msg["body"].encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        assert hmac.compare_digest(expected, parts["v1"]), f"{action}: sig mismatch"
+        # 300s replay window: t is a fresh current unix second.
+        assert abs(int(time.time()) - int(parts["t"])) <= 300, parts["t"]
+        # (d) routable key + the transition we triggered.
+        payload = json.loads(msg["body"])
+        assert payload["type"] == "license.status.changed"
+        assert payload["data"]["license_key"] == key
+        assert payload["data"]["current_status"] == current
 
 
 # ---------- regression: flash banners must render inside the modal --------
